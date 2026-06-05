@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <title>急診病摘測試頁</title>
+  <link rel="stylesheet" href="../src/content.css">
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, "Microsoft JhengHei", sans-serif;
+      background: #eef4f1;
+    }
+
+    header {
+      padding: 12px 18px;
+      color: #fff;
+      background: #24567f;
+      font-weight: 700;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      gap: 10px;
+      padding: 14px;
+    }
+
+    section {
+      padding: 12px;
+      border: 1px solid #b6d4c5;
+      background: #fff;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 220px;
+      box-sizing: border-box;
+    }
+  </style>
+</head>
+<body>
+  <header>病摘紀錄測試頁</header>
+  <main>
+    <section>
+      <h2>病人清單</h2>
+      <p>此頁為測試用假資料，不含真實病人資料。</p>
+      <table id="ERPatientListTable">
+        <thead>
+          <tr>
+            <th>病摘</th>
+            <th>檢傷序號</th>
+            <th>床號</th>
+            <th>照會</th>
+            <th>病歷號</th>
+            <th>姓名</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="tr-item">
+            <td></td>
+            <td></td>
+            <td>M01</td>
+            <td></td>
+            <td>00000001</td>
+            <td title="測試甲"><div>測試甲</div></td>
+          </tr>
+          <tr class="tr-item">
+            <td></td>
+            <td></td>
+            <td>M02</td>
+            <td></td>
+            <td>00000002</td>
+            <td title="測試乙"><div>測試乙</div></td>
+          </tr>
+          <tr class="tr-item">
+            <td></td>
+            <td></td>
+            <td>M03</td>
+            <td></td>
+            <td>00000003</td>
+            <td title="測試四字"><div>測試四字</div></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+    <section>
+      <h2>急診病摘</h2>
+      <div id="ER_Note">
+        <span title="體系病歷"><img class="mrn-link" alt="體系病歷"></span>
+      </div>
+      <textarea>主訴：發燒、咳嗽、痰多三天，今日呼吸較喘。
+病史：否認胸痛。生命徵象 SpO2 92%，體溫 38.4。
+檢查：CXR RLL infiltration，WBC elevated，CRP elevated。
+處置：給予氧氣、抽血、抗生素治療後安排住院。</textarea>
+    </section>
+  </main>
+  <script src="../src/content.js"></script>
+</body>
+</html>

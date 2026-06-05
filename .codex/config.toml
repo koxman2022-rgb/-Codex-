@@ -1,0 +1,8 @@
+# Project-scoped Codex settings.
+# Keep machine-specific auth, sessions, logs, and plugin cache out of the repo.
+
+project_doc_max_bytes = 65536
+project_doc_fallback_filenames = ["TEAM_GUIDE.md", ".agents.md"]
+
+[features]
+hooks = true

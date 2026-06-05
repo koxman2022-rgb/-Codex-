@@ -1,0 +1,34 @@
+# Windows / Explorer
+Thumbs.db
+Desktop.ini
+
+# Editor-local files
+.vscode/
+.idea/
+
+# Logs and temporary output
+*.log
+*.tmp
+tmp/
+temp/
+.cache/
+.codex-log/
+
+# Dependencies and generated bundles
+node_modules/
+dist/
+build/
+coverage/
+*.zip
+*.crx
+
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+auth.json
+
+# Codex local state should stay per-machine
+.codex/tmp/

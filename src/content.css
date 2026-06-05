@@ -1,0 +1,192 @@
+.ed-note-assistant {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 2147483647;
+  width: min(520px, calc(100vw - 36px));
+  max-height: min(720px, calc(100vh - 36px));
+  color: #172018;
+  font-family: Arial, "Microsoft JhengHei", sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  background: #f8fbf9;
+  border: 1px solid #2d7d58;
+  border-radius: 8px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+}
+
+.ed-note-assistant button,
+.ed-note-assistant textarea {
+  font: inherit;
+}
+
+.ed-note-assistant__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  color: #fff;
+  background: #2f7f5a;
+}
+
+.ed-note-assistant__title {
+  font-weight: 700;
+}
+
+.ed-note-assistant__toggle,
+.ed-note-assistant__primary,
+.ed-note-assistant__secondary,
+.ed-note-assistant__icon {
+  cursor: pointer;
+  border: 0;
+  border-radius: 6px;
+}
+
+.ed-note-assistant__toggle,
+.ed-note-assistant__icon {
+  width: 30px;
+  height: 30px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.ed-note-assistant__body {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  overflow: auto;
+  max-height: calc(min(720px, 100vh - 36px) - 50px);
+}
+
+.ed-note-assistant__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ed-note-assistant__primary,
+.ed-note-assistant__secondary {
+  min-height: 34px;
+  padding: 6px 10px;
+}
+
+.ed-note-assistant__primary {
+  color: #fff;
+  background: #147a4d;
+}
+
+.ed-note-assistant__secondary {
+  color: #17452f;
+  background: #dff1e8;
+}
+
+.ed-note-assistant__textarea {
+  width: 100%;
+  min-height: 150px;
+  padding: 8px;
+  color: #172018;
+  resize: vertical;
+  border: 1px solid #b8d7c8;
+  border-radius: 6px;
+  background: #fff;
+  box-sizing: border-box;
+}
+
+.ed-note-assistant__textarea--compact {
+  min-height: 110px;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+}
+
+.ed-note-assistant__export--hidden {
+  display: none;
+}
+
+.ed-note-assistant__section-title {
+  margin: 2px 0 4px;
+  font-weight: 700;
+  color: #22573e;
+}
+
+.ed-note-assistant__result {
+  display: grid;
+  gap: 8px;
+}
+
+.ed-note-assistant__suggestion {
+  padding: 8px;
+  border: 1px solid #cfe4d9;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.ed-note-assistant__suggestion-name {
+  font-weight: 700;
+}
+
+.ed-note-assistant__suggestion-meta {
+  margin-top: 3px;
+  color: #52645a;
+  font-size: 12px;
+}
+
+.ed-note-assistant__empty,
+.ed-note-assistant__notice,
+.ed-note-assistant__status {
+  color: #52645a;
+  font-size: 13px;
+}
+
+.ed-note-assistant__status {
+  min-height: 18px;
+  color: #22573e;
+}
+
+.ed-note-assistant--collapsed {
+  width: auto;
+}
+
+.ed-note-assistant--collapsed .ed-note-assistant__body {
+  display: none;
+}
+
+.ed-note-patient-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ed-note-patient-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ed-note-system-record-shortcut {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 22px;
+  margin-left: 0;
+  padding: 0 6px;
+  color: #0b5d38;
+  font: 700 12px/1 Arial, "Microsoft JhengHei", sans-serif;
+  background: #e2f4ea;
+  border: 1px solid #8fc9a9;
+  border-radius: 4px;
+  cursor: pointer;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.ed-note-system-record-shortcut:hover {
+  color: #fff;
+  background: #147a4d;
+  border-color: #147a4d;
+}

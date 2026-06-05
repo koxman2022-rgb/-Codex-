@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "急診病摘優化外掛",
+  "version": "0.1.0",
+  "description": "在急診病摘頁面加入本機輔助面板，協助讀取病摘文字並產生診斷候選。",
+  "permissions": ["activeTab", "storage"],
+  "content_scripts": [
+    {
+      "matches": ["https://intraweb.server.kmuh.org.tw/*"],
+      "js": ["src/content.js"],
+      "css": ["src/content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
