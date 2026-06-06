@@ -25,6 +25,9 @@
 - 在目標頁面右下角加入「急診病摘輔助」面板
 - 優先讀取使用者選取的文字；沒有選取時，讀取頁面可見文字與表單文字欄位
 - 以本機關鍵字規則產生診斷候選，並會忽略「否認、無、沒有」附近的否定關鍵字
+- 可將目前讀到的體系病歷內容整理成摘要
+- 可在體系病歷頁以「精簡模式」統整一年內高價值病歷類型
+- 可在 ER_Main 右側下方插入「外掛病歷預覽」區，顯示最近讀取或統整結果
 - 可複製診斷候選文字
 - 可匯出頁面架構 JSON，協助後續判斷病摘欄位、診斷欄位與按鈕位置
 - 可偵測 ER_Main 主頁常見 selector 是否存在
@@ -42,6 +45,9 @@
 
 目前已整理 ER_Main 主頁 selector 筆記：[docs/er-main-structure.md](docs/er-main-structure.md)。
 體系病歷查詢頁 selector 筆記：[docs/mrn-ioenote-structure.md](docs/mrn-ioenote-structure.md)。
+整體頁面架構與功能追加地圖：[docs/web-architecture-overview.md](docs/web-architecture-overview.md)。
+架構視覺化 HTML：[docs/architecture-visual.html](docs/architecture-visual.html)。
+一年內體系病歷統整功能設計：[docs/year-record-aggregation-design.md](docs/year-record-aggregation-design.md)。
 
 若要分析「體系病歷」頁面，請先按左側病人旁邊的「體系」進入頁面，再於新頁面右下角按「匯出頁面架構」。
 

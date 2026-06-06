@@ -82,6 +82,20 @@
   background: #dff1e8;
 }
 
+.ed-note-assistant__secondary:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.ed-note-assistant__danger {
+  color: #7b1e22;
+  background: #f8dddd;
+}
+
+.ed-note-assistant__action--hidden {
+  display: none;
+}
+
 .ed-note-assistant__textarea {
   width: 100%;
   min-height: 150px;
@@ -130,6 +144,45 @@
   margin-top: 3px;
   color: #52645a;
   font-size: 12px;
+}
+
+.ed-note-assistant__summary-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.ed-note-assistant__summary-list li + li {
+  margin-top: 4px;
+}
+
+.ed-note-assistant__mini-section {
+  margin-top: 8px;
+  color: #22573e;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ed-note-assistant__prewrap {
+  margin-top: 6px;
+  padding: 8px;
+  white-space: pre-wrap;
+  border: 1px solid #d7e7df;
+  border-radius: 6px;
+  background: #f8fbf9;
+}
+
+.ed-note-assistant__progress {
+  height: 8px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #d7e7df;
+}
+
+.ed-note-assistant__progress-bar {
+  height: 100%;
+  background: #147a4d;
+  transition: width 160ms ease;
 }
 
 .ed-note-assistant__empty,
@@ -189,4 +242,75 @@
   color: #fff;
   background: #147a4d;
   border-color: #147a4d;
+}
+
+.ed-note-record-preview {
+  min-height: 280px;
+  margin: 8px 10px 12px;
+  color: #172018;
+  font-family: Arial, "Microsoft JhengHei", sans-serif;
+  border: 1px solid #2d7d58;
+  border-radius: 8px;
+  background: #f8fbf9;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+}
+
+.ed-note-record-preview__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  color: #fff;
+  background: #2f7f5a;
+}
+
+.ed-note-record-preview__title {
+  font-weight: 700;
+}
+
+.ed-note-record-preview__meta {
+  margin-top: 2px;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 12px;
+}
+
+.ed-note-record-preview__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.ed-note-record-preview__actions button {
+  min-height: 28px;
+  padding: 4px 8px;
+  color: #17452f;
+  font: 13px/1.2 Arial, "Microsoft JhengHei", sans-serif;
+  border: 0;
+  border-radius: 6px;
+  background: #dff1e8;
+  cursor: pointer;
+}
+
+.ed-note-record-preview__body {
+  max-height: 440px;
+  min-height: 220px;
+  padding: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  background: #fff;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.ed-note-record-preview__frame {
+  position: absolute;
+  left: -10000px;
+  top: -10000px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }

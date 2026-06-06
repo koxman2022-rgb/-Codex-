@@ -1,6 +1,9 @@
 (function () {
   const PANEL_ID = "ed-note-assistant";
-  const STRUCTURE_EXPORT_VERSION = "0.2.0";
+  const ER_PREVIEW_ID = "ed-note-record-preview";
+  const ER_PREVIEW_FRAME_ID = "ed-note-record-preview-frame";
+  const RECENT_PREVIEW_STORAGE_KEY = "edNoteRecentPreview";
+  const STRUCTURE_EXPORT_VERSION = "0.3.0";
   const MAX_EXPORT_NODES = 1500;
   const MAX_CHILDREN_PER_NODE = 80;
   const IGNORED_EXPORT_TAGS = new Set(["script", "style", "noscript", "template", "option"]);
@@ -31,8 +34,26 @@
     trackModifyPanel: "#TrackModify",
     orderPanel: "#Order",
     orderTable: "#ControlOrderTable",
-    printForm: "#EMRPrint"
+    printForm: "#EMRPrint",
+    noteHeaderTable: "#NoteHeaderTable",
+    noteFrameForm: "#OnlyNote",
+    noteFrame: "#iframFormOnlyNote"
   };
+  const MRN_IOENOTE_FRAME_CONTENT_SELECTOR = "#nav-tabContent";
+  const YEAR_AGGREGATION_DEFAULT_TYPES = new Set([
+    "急診來診",
+    "急診轉歸",
+    "急診病程",
+    "轉區摘要",
+    "外傷來診紀錄",
+    "入院病摘",
+    "出院病摘",
+    "轉入病摘",
+    "轉出病摘"
+  ]);
+  const YEAR_AGGREGATION_MAX_RECORDS = 40;
+  const YEAR_RECORD_LOAD_DELAY_MS = 900;
+  const YEAR_RECORD_TIMEOUT_MS = 5000;
   const PATIENT_TABLE_SELECTOR = "#ERPatientListTable";
   const PATIENT_NAME_CELL_SELECTOR = "td:nth-child(6)";
   const SYSTEM_RECORD_SELECTOR = 'span[title="體系病歷"]';
@@ -40,8 +61,19 @@
   const PATIENT_NAME_CELL_CLASS = "ed-note-patient-name-cell";
   const PATIENT_NAME_TEXT_CLASS = "ed-note-patient-name-text";
   const SHORTCUT_OBSERVER_FLAG = "edNoteShortcutObserverReady";
+  const ER_RECORD_PREVIEW_OBSERVER_FLAG = "edNoteRecordPreviewObserverReady";
+  const ER_RECORD_PREVIEW_PROGRAMMATIC_CLICK_FLAG = "edNoteRecordPreviewClicking";
   const SYSTEM_RECORD_FAST_DELAY_MS = 80;
   const SYSTEM_RECORD_RETRY_TIMEOUT_MS = 900;
+  const ER_RECORD_PREVIEW_TIMEOUT_MS = 30000;
+  const yearAggregationState = {
+    running: false,
+    stopRequested: false
+  };
+  const erRecordPreviewState = {
+    sequence: 0,
+    enhanceTimerId: null
+  };
 
   const diagnosisRules = [
     {
@@ -104,6 +136,9 @@
       <div class="ed-note-assistant__body">
         <div class="ed-note-assistant__actions">
           <button class="ed-note-assistant__primary" type="button" data-action="read">讀取選取/頁面文字</button>
+          <button class="ed-note-assistant__secondary" type="button" data-action="summarize">整理病摘摘要</button>
+          <button class="ed-note-assistant__secondary" type="button" data-action="aggregate-year">統整一年病歷</button>
+          <button class="ed-note-assistant__secondary ed-note-assistant__danger ed-note-assistant__action--hidden" type="button" data-action="stop-year">停止統整</button>
           <button class="ed-note-assistant__secondary" type="button" data-action="suggest">產生診斷候選</button>
           <button class="ed-note-assistant__secondary" type="button" data-action="copy">複製結果</button>
           <button class="ed-note-assistant__secondary" type="button" data-action="detect-page">偵測頁面</button>
@@ -130,10 +165,22 @@
     `;
 
     panel.querySelector("[data-action='read']").addEventListener("click", () => {
-      getSource(panel).value = extractVisibleClinicalText();
+      const text = extractVisibleClinicalText();
+      getSource(panel).value = text;
+      saveRecentPreview("讀取內容", text);
+      refreshErMainPreview();
     });
     panel.querySelector("[data-action='suggest']").addEventListener("click", () => {
       renderSuggestions(panel, suggestDiagnoses(getSource(panel).value));
+    });
+    panel.querySelector("[data-action='summarize']").addEventListener("click", () => {
+      summarizeCurrentText(panel);
+    });
+    panel.querySelector("[data-action='aggregate-year']").addEventListener("click", () => {
+      aggregateYearRecords(panel);
+    });
+    panel.querySelector("[data-action='stop-year']").addEventListener("click", () => {
+      requestStopYearAggregation(panel);
     });
     panel.querySelector("[data-action='copy']").addEventListener("click", () => {
       copySuggestions(panel);
@@ -155,6 +202,7 @@
 
     document.body.appendChild(panel);
     enhanceErMainPatientList();
+    createErMainPreviewPanel();
   }
 
   function getSource(panel) {
@@ -188,6 +236,14 @@
       .trim();
   }
 
+  function truncateText(text, maxLength) {
+    const value = compactText(text);
+    if (value.length <= maxLength) {
+      return value;
+    }
+    return `${value.slice(0, Math.max(0, maxLength - 1))}…`;
+  }
+
   function extractFocusedPatientText() {
     const mrnText = extractMrnIoeNoteText();
     if (mrnText) {
@@ -216,6 +272,15 @@
       return "";
     }
 
+    const frameText = extractAccessibleFrameText(
+      MRN_IOENOTE_SELECTORS.noteFrame,
+      MRN_IOENOTE_FRAME_CONTENT_SELECTOR
+    );
+    const noteHeaderText = getElementText(MRN_IOENOTE_SELECTORS.noteHeaderTable);
+    if (frameText) {
+      return compactText([noteHeaderText, frameText].filter(Boolean).join("\n"));
+    }
+
     const selectors = [
       MRN_IOENOTE_SELECTORS.notePanel,
       MRN_IOENOTE_SELECTORS.trackModifyPanel,
@@ -224,14 +289,34 @@
       MRN_IOENOTE_SELECTORS.allDetailPanel
     ];
 
-    const text = selectors
+    const topDocumentText = selectors
       .map((selector) => document.querySelector(selector))
       .filter(Boolean)
       .map((element) => element.innerText || "")
       .filter(Boolean)
       .join("\n");
 
-    return compactText(text);
+    return compactText(topDocumentText);
+  }
+
+  function extractAccessibleFrameText(frameSelector, contentSelector) {
+    const frame = document.querySelector(frameSelector);
+    if (!frame) {
+      return "";
+    }
+
+    const frameDocument = getAccessibleFrameDocument(frame);
+    if (!frameDocument || !frameDocument.body) {
+      return "";
+    }
+
+    const content = frameDocument.querySelector(contentSelector) || frameDocument.body;
+    return compactText(content.innerText || "");
+  }
+
+  function getElementText(selector) {
+    const element = document.querySelector(selector);
+    return element ? compactText(element.innerText || "") : "";
   }
 
   function getReadableFormControls() {
@@ -287,6 +372,595 @@
         </div>
       `)
       .join("");
+  }
+
+  function summarizeCurrentText(panel) {
+    const source = getSource(panel);
+    if (!source.value.trim()) {
+      source.value = extractVisibleClinicalText();
+    }
+
+    const summary = summarizeClinicalText(source.value);
+    renderClinicalSummary(panel, summary);
+    saveRecentPreview("病摘摘要", formatClinicalSummaryText(summary));
+    refreshErMainPreview();
+    showPanelStatus(`已整理摘要：${summary.sourceLineCount} 行，${summary.sourceLength} 字。`);
+  }
+
+  function summarizeClinicalText(text) {
+    const cleanedText = compactText(text);
+    const lines = getClinicalSummaryLines(cleanedText);
+    const sections = [
+      buildSummarySection("主訴/主要問題", lines, ["主訴", "chief complaint", "cc", "complaint", "來診原因", "主要問題"], ["主訴", "complaint"], 3),
+      buildSummarySection("病史重點", lines, ["現病史", "病史", "hpi", "history", "past history", "pmh", "過去病史", "否認", "allergy", "過敏"], ["history", "病史", "否認", "過敏"], 4),
+      buildSummarySection("檢查/檢驗", lines, ["生命徵象", "vital", "bt", "bp", "hr", "rr", "spo2", "檢查", "檢驗", "lab", "wbc", "crp", "hb", "plt", "bun", "cre", "cr", "na", "k", "lactate", "troponin", "ekg", "ecg", "cxr", "ct", "x-ray", "infiltration"], ["生命徵象", "lab", "ekg", "cxr", "ct", "wbc", "crp", "troponin"], 5),
+      buildSummarySection("處置/治療", lines, ["處置", "治療", "plan", "management", "給予", "使用", "輸液", "抗生素", "止痛", "退燒", "oxygen", "o2", "ivf", "antibiotic", "consult", "會診"], ["處置", "治療", "給予", "抗生素", "consult"], 4),
+      buildSummarySection("轉歸/後續", lines, ["轉歸", "disposition", "住院", "入院", "出院", "留觀", "轉院", "ward", "icu", "admission", "admit", "discharge", "follow up", "返診"], ["轉歸", "disposition", "住院", "出院", "admit"], 3)
+    ];
+
+    const usedLines = new Set(sections.flatMap((section) => section.items));
+    const otherImportant = lines
+      .filter((line) => !usedLines.has(line))
+      .filter((line) => scoreSummaryLine(line, ["診斷", "impression", "assessment", "dx", "diagnosis", "急診", "病摘", "摘要"]) > 0)
+      .slice(0, 3);
+
+    if (otherImportant.length) {
+      sections.push({ title: "其他可能重要資訊", items: otherImportant });
+    }
+
+    return {
+      sourceLength: cleanedText.length,
+      sourceLineCount: lines.length,
+      sections
+    };
+  }
+
+  function getClinicalSummaryLines(text) {
+    const seen = new Set();
+    return text
+      .split(/\n|。|；|;/)
+      .map((line) => compactText(line))
+      .filter((line) => line.length >= 2)
+      .filter((line) => !/^(病摘\(完稿\)|追蹤修訂|醫囑)$/.test(line))
+      .filter((line) => {
+        const key = line.replace(/\s+/g, " ").toLowerCase();
+        if (seen.has(key)) {
+          return false;
+        }
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 240);
+  }
+
+  function buildSummarySection(title, lines, keywords, preferredKeywords, maxItems) {
+    const items = lines
+      .map((line, index) => ({
+        line,
+        index,
+        score: scoreSummaryLine(line, keywords) + scoreSummaryLine(line, preferredKeywords)
+      }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score || a.index - b.index)
+      .slice(0, maxItems)
+      .sort((a, b) => a.index - b.index)
+      .map((item) => item.line);
+
+    return { title, items };
+  }
+
+  function scoreSummaryLine(line, keywords) {
+    const normalizedLine = line.toLowerCase();
+    return keywords.reduce((score, keyword) => {
+      const normalizedKeyword = keyword.toLowerCase();
+      if (!normalizedLine.includes(normalizedKeyword)) {
+        return score;
+      }
+      return score + (line.length <= 120 ? 2 : 1);
+    }, 0);
+  }
+
+  function renderClinicalSummary(panel, summary) {
+    const result = panel.querySelector("[data-role='result']");
+    const nonEmptySections = summary.sections.filter((section) => section.items.length);
+
+    if (!nonEmptySections.length) {
+      result.innerHTML = `<div class="ed-note-assistant__empty">目前文字沒有足夠線索可整理摘要。請先確認已點選體系病歷左側紀錄，或手動補充病摘內容。</div>`;
+      return;
+    }
+
+    result.innerHTML = `
+      <div class="ed-note-assistant__suggestion">
+        <div class="ed-note-assistant__suggestion-name">體系病歷摘要</div>
+        <div class="ed-note-assistant__suggestion-meta">本機規則整理，請以原文與臨床判斷確認。</div>
+      </div>
+      ${nonEmptySections.map((section) => `
+        <div class="ed-note-assistant__suggestion">
+          <div class="ed-note-assistant__suggestion-name">${escapeHtml(section.title)}</div>
+          <ul class="ed-note-assistant__summary-list">
+            ${section.items.map((item) => `<li>${escapeHtml(truncateText(item, 260))}</li>`).join("")}
+          </ul>
+        </div>
+      `).join("")}
+    `;
+  }
+
+  function formatClinicalSummaryText(summary) {
+    const lines = ["病摘摘要"];
+    summary.sections
+      .filter((section) => section.items.length)
+      .forEach((section) => {
+        lines.push("");
+        lines.push(section.title);
+        section.items.forEach((item) => {
+          lines.push(`- ${truncateText(item, 220)}`);
+        });
+      });
+    return lines.join("\n");
+  }
+
+  async function aggregateYearRecords(panel) {
+    if (yearAggregationState.running) {
+      showPanelStatus("一年病歷統整已在執行中。");
+      return;
+    }
+    if (!document.querySelector(MRN_IOENOTE_SELECTORS.form) || !document.querySelector("#treeview")) {
+      showPanelStatus("請先在體系病歷查詢頁使用一年病歷統整。");
+      return;
+    }
+
+    const allEvents = collectYearRecordEvents();
+    const selectedEvents = allEvents
+      .filter((event) => YEAR_AGGREGATION_DEFAULT_TYPES.has(event.type))
+      .slice(0, YEAR_AGGREGATION_MAX_RECORDS);
+
+    if (!selectedEvents.length) {
+      renderYearAggregationEmpty(panel, allEvents);
+      showPanelStatus("沒有找到可統整的高價值病歷類型。");
+      return;
+    }
+
+    const originalIndex = allEvents.find((event) => event.isHighlighted)?.index ?? -1;
+    const records = [];
+    const failures = [];
+    yearAggregationState.running = true;
+    yearAggregationState.stopRequested = false;
+    setYearAggregationControls(panel, true);
+    renderYearAggregationProgress(panel, {
+      selectedEvents,
+      records,
+      failures,
+      currentIndex: 0,
+      stopped: false
+    });
+
+    try {
+      for (let index = 0; index < selectedEvents.length; index += 1) {
+        if (yearAggregationState.stopRequested) {
+          break;
+        }
+
+        const event = selectedEvents[index];
+        showPanelStatus(`統整一年病歷：${index + 1}/${selectedEvents.length}，正在讀取 ${event.type}`);
+        renderYearAggregationProgress(panel, {
+          selectedEvents,
+          records,
+          failures,
+          currentIndex: index,
+          stopped: false
+        });
+
+        try {
+          const label = getYearRecordLabelByIndex(event.index);
+          if (!label) {
+            throw new Error("找不到左側紀錄");
+          }
+          label.click();
+          const text = await waitForYearRecordText();
+          if (!text || text.length < 20) {
+            throw new Error("讀到的內容過短");
+          }
+          records.push({
+            ...event,
+            text,
+            summary: summarizeClinicalText(text)
+          });
+        } catch (error) {
+          failures.push({
+            ...event,
+            error: error.message || "讀取失敗"
+          });
+        }
+      }
+    } finally {
+      await restoreHighlightedYearRecord(originalIndex);
+      yearAggregationState.running = false;
+      setYearAggregationControls(panel, false);
+    }
+
+    const stopped = yearAggregationState.stopRequested;
+    yearAggregationState.stopRequested = false;
+    renderYearAggregationResult(panel, {
+      allEvents,
+      selectedEvents,
+      records,
+      failures,
+      stopped
+    });
+    showPanelStatus(stopped ? `已停止統整，完成 ${records.length} 筆。` : `一年病歷統整完成：成功 ${records.length} 筆，失敗 ${failures.length} 筆。`);
+  }
+
+  function requestStopYearAggregation(panel) {
+    if (!yearAggregationState.running) {
+      showPanelStatus("目前沒有正在執行的一年病歷統整。");
+      return;
+    }
+    yearAggregationState.stopRequested = true;
+    showPanelStatus("收到停止要求，會在目前這筆讀取後停止。");
+  }
+
+  function setYearAggregationControls(panel, running) {
+    const startButton = panel.querySelector("[data-action='aggregate-year']");
+    const stopButton = panel.querySelector("[data-action='stop-year']");
+    if (startButton) {
+      startButton.disabled = running;
+    }
+    if (stopButton) {
+      stopButton.classList.toggle("ed-note-assistant__action--hidden", !running);
+    }
+  }
+
+  function collectYearRecordEvents() {
+    return Array.from(document.querySelectorAll("label.DetailLi, label.DetailOPD")).map((label, index) => {
+      const row = label.closest(".LiteachforFilter") || label.closest("li");
+      const group = row && row.parentElement ? row.parentElement.closest("li.LiforFilter") : null;
+      const rawText = compactText(label.innerText || label.textContent || "");
+      return {
+        index,
+        type: normalizeYearRecordType(rawText, label.classList.contains("DetailOPD")),
+        title: getYearRecordTitle(rawText),
+        group: getYearRecordGroupLabel(group),
+        isHighlighted: label.classList.contains("highlight"),
+        kind: label.classList.contains("DetailOPD") ? "OPD" : "DetailLi"
+      };
+    });
+  }
+
+  function normalizeYearRecordType(text, isOpd) {
+    if (isOpd || text.includes("門診")) {
+      return "門診紀錄";
+    }
+    const knownTypes = [
+      "急診來診",
+      "急診轉歸",
+      "急診病程",
+      "轉區摘要",
+      "外傷來診紀錄",
+      "入院病摘",
+      "出院病摘",
+      "轉入病摘",
+      "轉出病摘",
+      "週病程紀錄",
+      "病程紀錄",
+      "主治紀錄"
+    ];
+    return knownTypes.find((type) => text.includes(type)) || "其他";
+  }
+
+  function getYearRecordTitle(text) {
+    return compactText(text)
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(0, 3)
+      .join(" / ")
+      .slice(0, 160);
+  }
+
+  function getYearRecordGroupLabel(group) {
+    if (!group) {
+      return "未分組";
+    }
+    const parts = Array.from(group.childNodes)
+      .filter((node) => node.nodeType === Node.TEXT_NODE || (node.nodeType === Node.ELEMENT_NODE && node.tagName.toLowerCase() !== "ul"))
+      .map((node) => node.textContent || "")
+      .join(" ");
+    return compactText(parts).slice(0, 120) || "未分組";
+  }
+
+  function getYearRecordLabelByIndex(index) {
+    return document.querySelectorAll("label.DetailLi, label.DetailOPD")[index] || null;
+  }
+
+  async function waitForYearRecordText() {
+    await sleep(YEAR_RECORD_LOAD_DELAY_MS);
+    const startedAt = Date.now();
+    let bestText = "";
+    while (Date.now() - startedAt < YEAR_RECORD_TIMEOUT_MS) {
+      const text = extractMrnIoeNoteText();
+      if (text.length > bestText.length) {
+        bestText = text;
+      }
+      if (text.length >= 80) {
+        return text;
+      }
+      await sleep(250);
+    }
+    return bestText;
+  }
+
+  async function restoreHighlightedYearRecord(originalIndex) {
+    if (originalIndex < 0) {
+      return;
+    }
+    const label = getYearRecordLabelByIndex(originalIndex);
+    if (!label) {
+      return;
+    }
+    label.click();
+    await sleep(YEAR_RECORD_LOAD_DELAY_MS);
+  }
+
+  function renderYearAggregationEmpty(panel, allEvents) {
+    const counts = countYearEventsByType(allEvents);
+    panel.querySelector("[data-role='result']").innerHTML = `
+      <div class="ed-note-assistant__suggestion">
+        <div class="ed-note-assistant__suggestion-name">一年病歷統整</div>
+        <div>目前沒有找到預設納入的高價值紀錄類型。</div>
+        <div class="ed-note-assistant__suggestion-meta">${escapeHtml(formatYearEventCounts(counts))}</div>
+      </div>
+    `;
+  }
+
+  function renderYearAggregationProgress(panel, progress) {
+    const result = panel.querySelector("[data-role='result']");
+    const total = progress.selectedEvents.length;
+    const current = Math.min(progress.currentIndex + 1, total);
+    result.innerHTML = `
+      <div class="ed-note-assistant__suggestion">
+        <div class="ed-note-assistant__suggestion-name">一年病歷統整進行中</div>
+        <div class="ed-note-assistant__progress">
+          <div class="ed-note-assistant__progress-bar" style="width: ${escapeHtml(String(total ? Math.round((progress.records.length / total) * 100) : 0))}%"></div>
+        </div>
+        <div class="ed-note-assistant__suggestion-meta">正在處理 ${current}/${total}；成功 ${progress.records.length}，失敗 ${progress.failures.length}</div>
+      </div>
+    `;
+    saveRecentPreview("一年病歷統整", shortDraft);
+    refreshErMainPreview();
+  }
+
+  function renderYearAggregationResult(panel, aggregation) {
+    const result = panel.querySelector("[data-role='result']");
+    const counts = countYearEventsByType(aggregation.allEvents);
+    const selectedCounts = countYearEventsByType(aggregation.selectedEvents);
+    const timeline = buildYearAggregationTimeline(aggregation.records);
+    const diagnosisCandidates = suggestDiagnoses(aggregation.records.map((record) => record.text).join("\n"));
+    const focusedSummary = buildFocusedYearSummary(aggregation.records);
+    const shortDraft = buildYearAggregationShortDraft(aggregation.records, diagnosisCandidates, focusedSummary);
+
+    result.innerHTML = `
+      <div class="ed-note-assistant__suggestion">
+        <div class="ed-note-assistant__suggestion-name">一年病歷統整（精簡模式）</div>
+        <div>${aggregation.stopped ? "已停止，以下為已讀取內容。" : "已完成批次讀取。"}</div>
+        <div class="ed-note-assistant__suggestion-meta">左側共 ${aggregation.allEvents.length} 筆；本次納入 ${aggregation.selectedEvents.length} 筆；成功 ${aggregation.records.length}，失敗 ${aggregation.failures.length}。</div>
+      </div>
+      <div class="ed-note-assistant__suggestion">
+        <div class="ed-note-assistant__suggestion-name">左側一年紀錄分布</div>
+        <div>${escapeHtml(formatYearEventCounts(counts))}</div>
+        <div class="ed-note-assistant__suggestion-meta">本次納入：${escapeHtml(formatYearEventCounts(selectedCounts))}</div>
+      </div>
+      <div class="ed-note-assistant__suggestion">
+        <div class="ed-note-assistant__suggestion-name">1. 過去病史</div>
+        ${renderFocusedSummaryItems(focusedSummary.pastHistory)}
+      </div>
+      <div class="ed-note-assistant__suggestion">
+        <div class="ed-note-assistant__suggestion-name">2. 門診用藥</div>
+        ${renderFocusedSummaryItems(focusedSummary.outpatientMedications)}
+      </div>
+      <div class="ed-note-assistant__suggestion">
+        <div class="ed-note-assistant__suggestion-name">3. 近期手術紀錄</div>
+        ${renderFocusedSummaryItems(focusedSummary.recentSurgeries)}
+      </div>
+      ${timeline.length ? `
+        <div class="ed-note-assistant__suggestion">
+          <div class="ed-note-assistant__suggestion-name">一年時間軸</div>
+          <ul class="ed-note-assistant__summary-list">
+            ${timeline.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+          </ul>
+        </div>
+      ` : ""}
+      ${diagnosisCandidates.length ? `
+        <div class="ed-note-assistant__suggestion">
+          <div class="ed-note-assistant__suggestion-name">可能診斷線索</div>
+          <ul class="ed-note-assistant__summary-list">
+            ${diagnosisCandidates.slice(0, 5).map((item) => `<li>${escapeHtml(item.name)}：${escapeHtml(item.hits.join("、"))}</li>`).join("")}
+          </ul>
+        </div>
+      ` : ""}
+      <div class="ed-note-assistant__suggestion">
+        <div class="ed-note-assistant__suggestion-name">可複製短版草稿</div>
+        <div class="ed-note-assistant__prewrap">${escapeHtml(shortDraft)}</div>
+      </div>
+      ${aggregation.records.slice(0, 12).map((record) => renderYearRecordCard(record)).join("")}
+      ${aggregation.records.length > 12 ? `
+        <div class="ed-note-assistant__suggestion">
+          <div class="ed-note-assistant__suggestion-meta">其餘 ${aggregation.records.length - 12} 筆已納入短版草稿與診斷線索，未逐卡顯示以避免面板過長。</div>
+        </div>
+      ` : ""}
+      ${aggregation.failures.length ? `
+        <div class="ed-note-assistant__suggestion">
+          <div class="ed-note-assistant__suggestion-name">讀取失敗</div>
+          <ul class="ed-note-assistant__summary-list">
+            ${aggregation.failures.map((failure) => `<li>${escapeHtml(failure.type)}：${escapeHtml(failure.error)}</li>`).join("")}
+          </ul>
+        </div>
+      ` : ""}
+    `;
+  }
+
+  function renderYearRecordCard(record) {
+    const sections = record.summary.sections
+      .filter((section) => section.items.length)
+      .slice(0, 3);
+    return `
+      <div class="ed-note-assistant__suggestion">
+        <div class="ed-note-assistant__suggestion-name">${escapeHtml(record.type)}</div>
+        <div class="ed-note-assistant__suggestion-meta">${escapeHtml(record.group)}｜${escapeHtml(record.title)}</div>
+        ${sections.length ? sections.map((section) => `
+          <div class="ed-note-assistant__mini-section">${escapeHtml(section.title)}</div>
+          <ul class="ed-note-assistant__summary-list">
+            ${section.items.slice(0, 2).map((item) => `<li>${escapeHtml(truncateText(item, 220))}</li>`).join("")}
+          </ul>
+        `).join("") : `<div class="ed-note-assistant__suggestion-meta">已讀取 ${record.text.length} 字，未抽到明確摘要句。</div>`}
+      </div>
+    `;
+  }
+
+  function countYearEventsByType(events) {
+    return events.reduce((counts, event) => {
+      counts[event.type] = (counts[event.type] || 0) + 1;
+      return counts;
+    }, {});
+  }
+
+  function formatYearEventCounts(counts) {
+    return Object.entries(counts)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "zh-Hant"))
+      .map(([type, count]) => `${type} ${count}`)
+      .join("、");
+  }
+
+  function buildYearAggregationTimeline(records) {
+    const groups = new Map();
+    records.forEach((record) => {
+      if (!groups.has(record.group)) {
+        groups.set(record.group, []);
+      }
+      groups.get(record.group).push(record);
+    });
+    return Array.from(groups.entries()).map(([group, groupRecords]) => {
+      const counts = formatYearEventCounts(countYearEventsByType(groupRecords));
+      return `${group}：${counts}`;
+    });
+  }
+
+  function buildFocusedYearSummary(records) {
+    const candidates = [];
+    records.forEach((record) => {
+      const lines = getClinicalSummaryLines(record.text);
+      lines.forEach((line, index) => {
+        candidates.push({
+          line,
+          index,
+          record,
+          normalized: line.toLowerCase()
+        });
+      });
+    });
+
+    const pastHistory = selectFocusedSummaryLines(candidates, [
+      "過去病史", "past history", "pmh", "病史", "history", "既往", "慢性", "診斷",
+      "diagnosis", "出院診斷", "入院診斷", "impression", "assessment", "癌", "腫瘤",
+      "dm", "diabetes", "htn", "hypertension", "ckd", "cad", "copd", "stroke", "cva"
+    ], ["病程紀錄", "週病程紀錄"], 8);
+
+    const outpatientMedications = selectFocusedSummaryLines(candidates, [
+      "門診用藥", "用藥", "藥物", "medication", "medications", "drug", "drugs",
+      "rx", "prescription", "po", "口服", "qd", "bid", "tid", "qid", "hs",
+      "insulin", "antibiotic", "anticoagulant", "抗凝", "降壓", "降糖"
+    ], ["急診來診", "急診轉歸", "急診病程"], 8);
+
+    const recentSurgeries = selectFocusedSummaryLines(candidates, [
+      "手術", "術後", "術前", "開刀", "op", "operation", "operative", "surgery",
+      "procedure", "切除", "縫合", "清創", "引流", "drainage", "debridement",
+      "laparoscopic", "orif", "插管", "導管", "catheter"
+    ], [], 8);
+
+    return {
+      pastHistory,
+      outpatientMedications,
+      recentSurgeries
+    };
+  }
+
+  function selectFocusedSummaryLines(candidates, keywords, deprioritizedTypes, maxItems) {
+    const seen = new Set();
+    return candidates
+      .map((candidate) => {
+        const keywordScore = scoreSummaryLine(candidate.line, keywords);
+        const recordTypeBonus = deprioritizedTypes.includes(candidate.record.type) ? -1 : 0;
+        const summaryTypeBonus = ["入院病摘", "出院病摘", "轉入病摘", "轉出病摘", "門診紀錄"].includes(candidate.record.type) ? 2 : 0;
+        return {
+          ...candidate,
+          score: keywordScore + recordTypeBonus + summaryTypeBonus
+        };
+      })
+      .filter((candidate) => candidate.score > 0)
+      .sort((a, b) => b.score - a.score || a.record.index - b.record.index || a.index - b.index)
+      .filter((candidate) => {
+        const key = normalizeFocusedSummaryLine(candidate.line);
+        if (!key || seen.has(key)) {
+          return false;
+        }
+        seen.add(key);
+        return true;
+      })
+      .slice(0, maxItems)
+      .map((candidate) => ({
+        type: candidate.record.type,
+        group: candidate.record.group,
+        text: truncateText(candidate.line, 180)
+      }));
+  }
+
+  function normalizeFocusedSummaryLine(line) {
+    return line
+      .toLowerCase()
+      .replace(/\d+/g, "0")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120);
+  }
+
+  function renderFocusedSummaryItems(items) {
+    if (!items.length) {
+      return `<div class="ed-note-assistant__suggestion-meta">未從本次讀取內容抓到明確線索，請回原文確認。</div>`;
+    }
+    return `
+      <ul class="ed-note-assistant__summary-list">
+        ${items.map((item) => `<li>${escapeHtml(item.text)} <span class="ed-note-assistant__suggestion-meta">（${escapeHtml(item.type)}）</span></li>`).join("")}
+      </ul>
+    `;
+  }
+
+  function buildYearAggregationShortDraft(records, diagnosisCandidates, focusedSummary) {
+    const counts = formatYearEventCounts(countYearEventsByType(records));
+    const lines = [
+      `一年內體系病歷精簡統整：共讀取 ${records.length} 筆（${counts}）。`
+    ];
+    lines.push("");
+    lines.push("1. 過去病史");
+    lines.push(...formatFocusedSummaryDraftLines(focusedSummary.pastHistory));
+    lines.push("");
+    lines.push("2. 門診用藥");
+    lines.push(...formatFocusedSummaryDraftLines(focusedSummary.outpatientMedications));
+    lines.push("");
+    lines.push("3. 近期手術紀錄");
+    lines.push(...formatFocusedSummaryDraftLines(focusedSummary.recentSurgeries));
+    if (diagnosisCandidates.length) {
+      lines.push("");
+      lines.push(`可能相關診斷線索：${diagnosisCandidates.slice(0, 4).map((item) => item.name).join("、")}。`);
+    }
+    lines.push("");
+    lines.push("以上為外掛本機規則整理草稿，請回原文確認後再使用。");
+    return lines.join("\n");
+  }
+
+  function formatFocusedSummaryDraftLines(items) {
+    if (!items.length) {
+      return ["- 未抓到明確線索，請回原文確認。"];
+    }
+    return items.slice(0, 6).map((item) => `- ${item.text}（${item.type}）`);
   }
 
   async function copySuggestions(panel) {
@@ -350,24 +1024,276 @@
   }
 
   function enhanceErMainPatientList() {
-    addSystemRecordShortcuts();
+    runErMainEnhancements();
 
     if (document.body.dataset[SHORTCUT_OBSERVER_FLAG] === "true") {
       return;
     }
     document.body.dataset[SHORTCUT_OBSERVER_FLAG] = "true";
 
-    const observer = new MutationObserver(() => addSystemRecordShortcuts());
+    const observer = new MutationObserver(() => {
+      scheduleErMainEnhancements();
+    });
     observer.observe(document.body, { childList: true, subtree: true });
 
     let attempts = 0;
     const intervalId = window.setInterval(() => {
       attempts += 1;
-      addSystemRecordShortcuts();
+      scheduleErMainEnhancements();
       if (attempts >= 30) {
         window.clearInterval(intervalId);
       }
     }, 500);
+  }
+
+  function scheduleErMainEnhancements() {
+    if (erRecordPreviewState.enhanceTimerId) {
+      return;
+    }
+    erRecordPreviewState.enhanceTimerId = window.setTimeout(() => {
+      erRecordPreviewState.enhanceTimerId = null;
+      runErMainEnhancements();
+    }, 250);
+  }
+
+  function runErMainEnhancements() {
+    addSystemRecordShortcuts();
+    attachErMainRecordPreviewEvents();
+    createErMainPreviewPanel();
+  }
+
+  function attachErMainRecordPreviewEvents() {
+    if (!document.querySelector(ER_MAIN_SELECTORS.recordTable) || !document.body) {
+      return;
+    }
+    if (document.body.dataset[ER_RECORD_PREVIEW_OBSERVER_FLAG] === "true") {
+      return;
+    }
+    document.body.dataset[ER_RECORD_PREVIEW_OBSERVER_FLAG] = "true";
+
+    document.addEventListener("click", handleErMainRecordPreviewClick, true);
+  }
+
+  function handleErMainRecordPreviewClick(event) {
+    const target = event.target;
+    if (!(target instanceof Element) || target.closest(`#${ER_PREVIEW_ID}`)) {
+      return;
+    }
+
+    const row = target.closest(`${ER_MAIN_SELECTORS.recordTable} tbody tr`);
+    if (!row) {
+      return;
+    }
+
+    if (target.closest(".usr-ERedit, .usr-ERdelete, .usr-ERprint, .usr-ERditto")) {
+      return;
+    }
+
+    const readOnlyTrigger = target.closest(".usr-ERreadnoly, .action-icon.view");
+    if (readOnlyTrigger) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      submitErReadonlyPreviewFromRow(row);
+      return;
+    }
+
+    window.setTimeout(() => {
+      submitErReadonlyPreviewFromRow(row);
+    }, 120);
+  }
+
+  function triggerErRecordPreviewFromRow(row) {
+    submitErReadonlyPreviewFromRow(row);
+  }
+
+  function submitErReadonlyPreviewFromRow(row) {
+    createErMainPreviewPanel();
+    const form = document.querySelector("#TurnToROView");
+    const frame = getOrCreateErPreviewFrame();
+    if (!form || !frame) {
+      renderErPreviewMessage("找不到院內唯讀表單，暫時無法背景預覽這筆病歷。");
+      return false;
+    }
+
+    fillErReadonlyPreviewForm(form, row);
+
+    const sequence = erRecordPreviewState.sequence + 1;
+    erRecordPreviewState.sequence = sequence;
+    const meta = getErRecordRowMeta(row);
+    const originalTarget = form.getAttribute("target");
+    const restoreTarget = () => {
+      if (form.getAttribute("target") !== frame.name) {
+        return;
+      }
+      if (originalTarget === null) {
+        form.removeAttribute("target");
+      } else {
+        form.setAttribute("target", originalTarget);
+      }
+    };
+
+    renderErPreviewMessage("正在背景讀取這筆病歷；若跳出調閱權限確認，按確定後會繼續載入。", meta);
+    form.setAttribute("target", frame.name);
+
+    let finished = false;
+    frame.onload = () => {
+      window.setTimeout(() => {
+        if (erRecordPreviewState.sequence !== sequence || finished) {
+          return;
+        }
+        finished = true;
+        restoreTarget();
+        const text = extractErReadonlyFrameText(frame);
+        if (text) {
+          renderErPreviewText(meta, text);
+          saveRecentPreview(meta.title || "急診病歷預覽", text);
+        } else {
+          renderErPreviewMessage("背景頁已載入，但沒有讀到可顯示的病歷文字。", meta);
+        }
+      }, 500);
+    };
+
+    window.setTimeout(() => {
+      if (erRecordPreviewState.sequence !== sequence || finished) {
+        return;
+      }
+      finished = true;
+      restoreTarget();
+      renderErPreviewMessage("等待背景病歷載入逾時。請再點一次該筆病歷，或先確認院內權限提示是否已處理。", meta);
+    }, ER_RECORD_PREVIEW_TIMEOUT_MS);
+
+    submitFormToBackgroundFrame(form);
+    return true;
+  }
+
+  function fillErReadonlyPreviewForm(form, row) {
+    const originalNoteId = getErRecordCellText(row, 13);
+    const selfNoteId = getErRecordCellText(row, 5);
+    const noteId = selfNoteId || originalNoteId;
+    const hasTrackEdit = Boolean(selfNoteId);
+    const logObject = {
+      SERIALNO: getErRecordCellText(row, 2),
+      FLOWID: getErRecordCellText(row, 14),
+      ACTION: "ReadOnly"
+    };
+
+    setFormFieldValue(form, "ROinhospID", getErRecordCellText(row, 1));
+    setFormFieldValue(form, "PatientROInfo", extractErPatientInfoLiteral());
+    setFormFieldValue(form, "ROKind", getErRecordCellText(row, 3));
+    setFormFieldValue(form, "inGroupAnswerIDX", originalNoteId);
+    setFormFieldValue(form, "ROnote_date", getErRecordCellText(row, 4));
+    setFormFieldValue(form, "ROkindname", getErRecordCellText(row, 10));
+    setFormFieldValue(form, "inRevisionIDX", noteId);
+    setFormFieldValue(form, "ROSource", "ER");
+    setFormFieldValue(form, "ROflowid", getErRecordCellText(row, 14));
+    setFormFieldValue(form, "ROPreflowid", getErRecordCellText(row, 15));
+    setFormFieldValue(form, "ROserialno", getErRecordCellText(row, 2));
+    setFormFieldValue(form, "RONoteLogDto", JSON.stringify(logObject));
+    setFormFieldValue(form, "ROflowall", getErRecordCellText(row, 16));
+    setFormFieldValue(form, "ROflowSN", getErRecordCellText(row, 17));
+    setFormFieldValue(form, "ROnext_flow", getErRecordCellText(row, 11));
+    setFormFieldValue(form, "ROSecondDRcode", getErRecordCellText(row, 19));
+    setFormFieldValue(form, "ROSecondDRname", getErRecordCellText(row, 21));
+    setFormFieldValue(form, "ROFirstDRcode", getErRecordCellText(row, 18));
+    setFormFieldValue(form, "ROCreater", getErRecordCellText(row, 20));
+    setFormFieldValue(form, "ROCreaterCode", getErRecordCellText(row, 18));
+    setFormFieldValue(form, "ROisteach", getErRecordCellText(row, 24));
+    setFormFieldValue(form, "HasTrackEdit", hasTrackEdit);
+  }
+
+  function setFormFieldValue(form, id, value) {
+    const field = form.querySelector(`#${cssEscape(id)}`);
+    if (field) {
+      field.value = value == null ? "" : String(value);
+    }
+  }
+
+  function extractErPatientInfoLiteral() {
+    const scriptText = Array.from(document.scripts)
+      .map((script) => script.textContent || "")
+      .find((text) => text.includes("function ReadOnlyFormForERstep2") && text.includes("var PatientInfo ="));
+    if (!scriptText) {
+      return "";
+    }
+
+    const start = scriptText.indexOf("var PatientInfo =");
+    const end = scriptText.indexOf("var flowid =", start);
+    if (start < 0 || end < 0) {
+      return "";
+    }
+
+    const block = scriptText.slice(start, end);
+    const match = block.match(/var\s+PatientInfo\s*=\s*'([\s\S]*?)';/);
+    return match ? match[1].replace(/&quot;/g, "\"") : "";
+  }
+
+  function submitFormToBackgroundFrame(form) {
+    if (window.HTMLFormElement && HTMLFormElement.prototype.submit) {
+      HTMLFormElement.prototype.submit.call(form);
+    } else {
+      form.submit();
+    }
+  }
+
+  function getOrCreateErPreviewFrame() {
+    let frame = document.getElementById(ER_PREVIEW_FRAME_ID);
+    if (frame) {
+      return frame;
+    }
+
+    frame = document.createElement("iframe");
+    frame.id = ER_PREVIEW_FRAME_ID;
+    frame.name = ER_PREVIEW_FRAME_ID;
+    frame.title = "急診病歷背景預覽";
+    frame.className = "ed-note-record-preview__frame";
+    document.body.appendChild(frame);
+    return frame;
+  }
+
+  function extractErReadonlyFrameText(frame) {
+    const frameDocument = getAccessibleFrameDocument(frame);
+    if (!frameDocument || !frameDocument.body) {
+      return "";
+    }
+
+    const preferredSelectors = [
+      "#form1",
+      "#OnlyNote",
+      "#Note",
+      "#AllDetailDiv",
+      ".container-fluid",
+      ".container",
+      "main"
+    ];
+    const preferredText = preferredSelectors
+      .map((selector) => frameDocument.querySelector(selector))
+      .filter(Boolean)
+      .map((element) => element.innerText || "")
+      .filter(Boolean)
+      .join("\n");
+
+    return compactText(preferredText || frameDocument.body.innerText || "");
+  }
+
+  function getErRecordRowMeta(row) {
+    const recordTime = getErRecordCellText(row, 9);
+    const formName = getErRecordCellText(row, 10) || getErRecordCellText(row, 3);
+    const flow = getErRecordCellText(row, 8);
+    const status = getErRecordCellText(row, 12);
+    const titleParts = [formName, recordTime].filter(Boolean);
+    return {
+      title: titleParts.length ? titleParts.join("｜") : "急診病歷預覽",
+      formName,
+      recordTime,
+      flow,
+      status
+    };
+  }
+
+  function getErRecordCellText(row, index) {
+    const cell = row.cells[index];
+    return cell ? compactText(cell.innerText || "") : "";
   }
 
   function addSystemRecordShortcuts() {
@@ -458,6 +1384,184 @@
     }
   }
 
+  function saveRecentPreview(title, text) {
+    const cleanedText = compactText(text || "");
+    if (!cleanedText) {
+      return;
+    }
+    const preview = {
+      title,
+      text: cleanedText,
+      savedAt: new Date().toISOString(),
+      location: {
+        pathname: window.location.pathname,
+        title: document.title
+      }
+    };
+
+    try {
+      if (window.chrome && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.set({ [RECENT_PREVIEW_STORAGE_KEY]: preview });
+        return;
+      }
+    } catch (error) {
+      // Fall through to localStorage.
+    }
+
+    try {
+      window.localStorage.setItem(RECENT_PREVIEW_STORAGE_KEY, JSON.stringify(preview));
+    } catch (error) {
+      // Ignore preview persistence failures.
+    }
+  }
+
+  function loadRecentPreview(callback) {
+    try {
+      if (window.chrome && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.get(RECENT_PREVIEW_STORAGE_KEY, (items) => {
+          callback(items ? items[RECENT_PREVIEW_STORAGE_KEY] || null : null);
+        });
+        return;
+      }
+    } catch (error) {
+      // Fall through to localStorage.
+    }
+
+    try {
+      const raw = window.localStorage.getItem(RECENT_PREVIEW_STORAGE_KEY);
+      callback(raw ? JSON.parse(raw) : null);
+    } catch (error) {
+      callback(null);
+    }
+  }
+
+  function clearRecentPreview(callback) {
+    try {
+      if (window.chrome && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.remove(RECENT_PREVIEW_STORAGE_KEY, () => {
+          if (callback) {
+            callback();
+          }
+        });
+        return;
+      }
+    } catch (error) {
+      // Fall through to localStorage.
+    }
+
+    try {
+      window.localStorage.removeItem(RECENT_PREVIEW_STORAGE_KEY);
+    } catch (error) {
+      // Ignore preview persistence failures.
+    }
+    if (callback) {
+      callback();
+    }
+  }
+
+  function createErMainPreviewPanel() {
+    if (!document.querySelector(ER_MAIN_SELECTORS.patientTable) || !document.querySelector(ER_MAIN_SELECTORS.noteAndEvaPanel)) {
+      return;
+    }
+    if (document.getElementById(ER_PREVIEW_ID)) {
+      return;
+    }
+
+    const host = document.querySelector(ER_MAIN_SELECTORS.noteAndEvaPanel);
+    const preview = document.createElement("section");
+    preview.id = ER_PREVIEW_ID;
+    preview.className = "ed-note-record-preview";
+    preview.innerHTML = `
+      <div class="ed-note-record-preview__header">
+        <div>
+          <div class="ed-note-record-preview__title">外掛病歷預覽</div>
+          <div class="ed-note-record-preview__meta" data-role="preview-meta">尚未載入</div>
+        </div>
+        <div class="ed-note-record-preview__actions">
+          <button type="button" data-preview-action="refresh">更新</button>
+          <button type="button" data-preview-action="read-selected">讀選取</button>
+          <button type="button" data-preview-action="clear">清除</button>
+        </div>
+      </div>
+      <div class="ed-note-record-preview__body" data-role="preview-body">
+        尚無可預覽內容。點右上方病歷紀錄列或眼睛按鈕後，外掛會在背景讀取該筆病歷。
+      </div>
+    `;
+
+    preview.querySelector("[data-preview-action='refresh']").addEventListener("click", () => {
+      refreshErMainPreview();
+    });
+    preview.querySelector("[data-preview-action='read-selected']").addEventListener("click", () => {
+      const row = document.querySelector(`${ER_MAIN_SELECTORS.recordTable} tbody tr.highlight`) || document.querySelector(`${ER_MAIN_SELECTORS.recordTable} tbody tr`);
+      if (row) {
+        triggerErRecordPreviewFromRow(row);
+        showPanelStatus("正在背景讀取選取的急診病歷。");
+      } else {
+        renderErPreviewMessage("目前右側沒有可讀取的病歷列。");
+      }
+    });
+    preview.querySelector("[data-preview-action='clear']").addEventListener("click", () => {
+      clearRecentPreview(() => refreshErMainPreview());
+    });
+
+    host.appendChild(preview);
+    refreshErMainPreview();
+  }
+
+  function refreshErMainPreview() {
+    const preview = document.getElementById(ER_PREVIEW_ID);
+    if (!preview) {
+      return;
+    }
+    const body = preview.querySelector("[data-role='preview-body']");
+    const meta = preview.querySelector("[data-role='preview-meta']");
+    loadRecentPreview((recentPreview) => {
+      if (!recentPreview || !recentPreview.text) {
+        body.textContent = "尚無可預覽內容。點右上方病歷紀錄列或眼睛按鈕後，外掛會在背景讀取該筆病歷。";
+        meta.textContent = "尚未載入";
+        return;
+      }
+      const savedAt = recentPreview.savedAt ? new Date(recentPreview.savedAt).toLocaleString("zh-TW", { hour12: false }) : "未知時間";
+      const sourceTitle = recentPreview.location && recentPreview.location.title ? recentPreview.location.title : "未知頁面";
+      meta.textContent = `${recentPreview.title || "病歷預覽"}｜${sourceTitle}｜${savedAt}`;
+      body.textContent = truncateText(recentPreview.text, 5000);
+    });
+  }
+
+  function renderErPreviewMessage(message, recordMeta) {
+    const preview = document.getElementById(ER_PREVIEW_ID);
+    if (!preview) {
+      return;
+    }
+    const body = preview.querySelector("[data-role='preview-body']");
+    const meta = preview.querySelector("[data-role='preview-meta']");
+    body.textContent = message;
+    meta.textContent = formatErPreviewMeta(recordMeta);
+  }
+
+  function renderErPreviewText(recordMeta, text) {
+    const preview = document.getElementById(ER_PREVIEW_ID);
+    if (!preview) {
+      return;
+    }
+    const body = preview.querySelector("[data-role='preview-body']");
+    const meta = preview.querySelector("[data-role='preview-meta']");
+    meta.textContent = formatErPreviewMeta(recordMeta);
+    body.textContent = truncateText(text, 8000);
+  }
+
+  function formatErPreviewMeta(recordMeta) {
+    if (!recordMeta) {
+      return "尚未載入";
+    }
+    const parts = [
+      recordMeta.formName || "急診病歷",
+      recordMeta.recordTime,
+      recordMeta.status
+    ].filter(Boolean);
+    return parts.join("｜") || "急診病歷";
+  }
+
   async function exportAndCopyStructure(panel) {
     const status = panel.querySelector("[data-role='status']");
     try {
@@ -489,8 +1593,15 @@
 
   function buildPageStructureExport() {
     const state = { nodeCount: 0, truncated: false };
-    const frameExports = [serializeDocument(document, "top", state)];
     const frameSummaries = collectFrameSummaries();
+    const documentExports = [serializeDocument(document, "top", state)];
+
+    getPageElements("iframe, frame").forEach((frame, index) => {
+      const frameDocument = getAccessibleFrameDocument(frame);
+      if (frameDocument && frameDocument.body) {
+        documentExports.push(serializeDocument(frameDocument, `frame:${index}:${frame.id || frame.name || "unnamed"}`, state));
+      }
+    });
 
     return {
       exportVersion: STRUCTURE_EXPORT_VERSION,
@@ -507,10 +1618,11 @@
         truncated: state.truncated,
         formControlCount: getPageElements("input, textarea, select").length,
         buttonCount: getPageElements("button, input[type='button'], input[type='submit'], [role='button']").length,
-        frameCount: frameSummaries.length
+        frameCount: frameSummaries.length,
+        documentCount: documentExports.length
       },
       frames: frameSummaries,
-      documents: frameExports
+      documents: documentExports
     };
   }
 
@@ -536,6 +1648,7 @@
       id: form.id || undefined,
       name: form.getAttribute("name") || undefined,
       method: form.getAttribute("method") || undefined,
+      target: form.getAttribute("target") || undefined,
       action: form.getAttribute("action") ? "[redacted]" : undefined,
       controls: Array.from(form.querySelectorAll("input, textarea, select, button")).map(serializeControl)
     };
@@ -580,8 +1693,17 @@
       id: frame.id || undefined,
       name: frame.getAttribute("name") || undefined,
       title: sanitizeText(frame.getAttribute("title")),
-      src: frame.getAttribute("src") ? "[redacted]" : undefined
+      src: frame.getAttribute("src") ? "[redacted]" : undefined,
+      accessible: Boolean(getAccessibleFrameDocument(frame))
     }));
+  }
+
+  function getAccessibleFrameDocument(frame) {
+    try {
+      return frame.contentDocument || (frame.contentWindow && frame.contentWindow.document) || null;
+    } catch (error) {
+      return null;
+    }
   }
 
   function serializeElement(element, state, depth) {
@@ -639,7 +1761,7 @@
   }
 
   function getSerializableAttributes(element) {
-    const attrNames = ["id", "class", "name", "type", "role", "placeholder", "title", "aria-label", "aria-labelledby", "data-testid", "data-test", "data-id"];
+    const attrNames = ["id", "class", "name", "type", "role", "target", "placeholder", "title", "aria-label", "aria-labelledby", "data-testid", "data-test", "data-id"];
     return attrNames.reduce((attrs, name) => {
       const value = element.getAttribute(name);
       if (value) {
@@ -669,7 +1791,8 @@
     if (!element.id) {
       return undefined;
     }
-    const label = document.querySelector(`label[for="${cssEscape(element.id)}"]`);
+    const ownerDocument = element.ownerDocument || document;
+    const label = ownerDocument.querySelector(`label[for="${cssEscape(element.id)}"]`);
     return label ? sanitizeText(label.innerText || label.textContent) : undefined;
   }
 
@@ -679,8 +1802,9 @@
     }
 
     const parts = [];
+    const ownerDocument = element.ownerDocument || document;
     let current = element;
-    while (current && current.nodeType === Node.ELEMENT_NODE && current !== document.body && parts.length < 5) {
+    while (current && current.nodeType === Node.ELEMENT_NODE && current !== ownerDocument.body && parts.length < 5) {
       const tag = current.tagName.toLowerCase();
       const name = current.getAttribute("name");
       const type = current.getAttribute("type");

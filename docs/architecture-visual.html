@@ -1,0 +1,564 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>急診病摘優化外掛 - 架構視覺化</title>
+  <style>
+    :root {
+      --bg: #f4f7f5;
+      --ink: #18251e;
+      --muted: #5d6e64;
+      --line: #bfd8ca;
+      --panel: #ffffff;
+      --green: #1e7a52;
+      --green-soft: #e3f3eb;
+      --blue: #24567f;
+      --blue-soft: #e4eef6;
+      --amber: #88640f;
+      --amber-soft: #fff4d8;
+      --red: #8a2f35;
+      --red-soft: #fde7e8;
+      --shadow: 0 10px 28px rgba(30, 55, 42, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: Arial, "Microsoft JhengHei", sans-serif;
+      line-height: 1.55;
+      background: var(--bg);
+    }
+
+    header {
+      padding: 28px 24px 22px;
+      color: #fff;
+      background: linear-gradient(135deg, #1f7050, #24567f);
+    }
+
+    header h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      letter-spacing: 0;
+    }
+
+    header p {
+      max-width: 960px;
+      margin: 0;
+      color: rgba(255, 255, 255, 0.86);
+    }
+
+    main {
+      width: min(1180px, calc(100vw - 32px));
+      margin: 22px auto 48px;
+    }
+
+    section {
+      margin-top: 22px;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 20px;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 15px;
+    }
+
+    code {
+      padding: 1px 5px;
+      color: #17452f;
+      border-radius: 4px;
+      background: #e9f3ee;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.92em;
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .grid-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .grid-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .card {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .step {
+      position: relative;
+      min-height: 88px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .step:not(:last-child)::after {
+      content: ">";
+      position: absolute;
+      top: 50%;
+      right: -12px;
+      z-index: 2;
+      width: 20px;
+      height: 20px;
+      transform: translateY(-50%);
+      color: #fff;
+      text-align: center;
+      line-height: 20px;
+      border-radius: 999px;
+      background: var(--green);
+      font-weight: 700;
+      font-family: Consolas, "Courier New", monospace;
+    }
+
+    .step strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--green);
+    }
+
+    .mock-window {
+      overflow: hidden;
+      border: 1px solid #9fc5b2;
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: var(--shadow);
+    }
+
+    .mock-title {
+      padding: 9px 12px;
+      color: #fff;
+      background: var(--blue);
+      font-weight: 700;
+    }
+
+    .mock-body {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      background: #f7faf8;
+    }
+
+    .layout-er {
+      grid-template-columns: 340px 1fr;
+    }
+
+    .layout-ioe {
+      grid-template-columns: 330px 1fr;
+    }
+
+    .mock-box {
+      padding: 10px;
+      min-height: 64px;
+      border: 1px dashed #96bda9;
+      border-radius: 6px;
+      background: #fff;
+    }
+
+    .mock-box h3 {
+      color: var(--green);
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
+      padding: 7px;
+      border: 1px solid #d5e6dc;
+      border-radius: 6px;
+      background: #fbfdfc;
+      font-size: 13px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 24px;
+      padding: 2px 8px;
+      color: #0b5d38;
+      border: 1px solid #8fc9a9;
+      border-radius: 999px;
+      background: var(--green-soft);
+      font-weight: 700;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+
+    .tab {
+      padding: 5px 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      font-size: 13px;
+    }
+
+    .tab.active {
+      color: #fff;
+      background: var(--green);
+      border-color: var(--green);
+    }
+
+    .tree-item {
+      margin-top: 6px;
+      padding: 7px 8px;
+      border-left: 3px solid var(--line);
+      background: #fff;
+      font-size: 13px;
+    }
+
+    .tree-item.highlight {
+      border-left-color: var(--green);
+      background: var(--green-soft);
+      font-weight: 700;
+    }
+
+    .iframe {
+      margin-top: 8px;
+      padding: 10px;
+      border: 2px solid #83b99d;
+      border-radius: 6px;
+      background: var(--green-soft);
+    }
+
+    .assistant {
+      border: 1px solid #2d7d58;
+      border-radius: 8px;
+      background: #f8fbf9;
+      overflow: hidden;
+    }
+
+    .assistant-title {
+      padding: 9px 11px;
+      color: #fff;
+      background: #2f7f5a;
+      font-weight: 700;
+    }
+
+    .assistant-body {
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+    }
+
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .fake-button {
+      padding: 5px 8px;
+      color: #17452f;
+      border-radius: 6px;
+      background: #dff1e8;
+      font-size: 12px;
+    }
+
+    .fake-button.primary {
+      color: #fff;
+      background: #147a4d;
+    }
+
+    .fake-button.danger {
+      color: var(--red);
+      background: var(--red-soft);
+    }
+
+    .mini-card {
+      padding: 9px;
+      border: 1px solid #cfe4d9;
+      border-radius: 6px;
+      background: #fff;
+      font-size: 13px;
+    }
+
+    .feature-map {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .feature {
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .feature.safe {
+      border-color: #a8d0b9;
+      background: var(--green-soft);
+    }
+
+    .feature.medium {
+      border-color: #efd281;
+      background: var(--amber-soft);
+    }
+
+    .feature.risky {
+      border-color: #efb0b6;
+      background: var(--red-soft);
+    }
+
+    ul {
+      margin: 8px 0 0;
+      padding-left: 20px;
+    }
+
+    li + li {
+      margin-top: 4px;
+    }
+
+    @media (max-width: 900px) {
+      .flow,
+      .grid-2,
+      .grid-3,
+      .layout-er,
+      .layout-ioe,
+      .feature-map {
+        grid-template-columns: 1fr;
+      }
+
+      .step:not(:last-child)::after {
+        top: auto;
+        right: 50%;
+        bottom: -14px;
+        transform: translateX(50%) rotate(90deg);
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>急診病摘優化外掛 - 架構視覺化</h1>
+    <p>這份頁面用來說明目前外掛理解的院內頁面結構、資料流、讀取位置與可追加功能。內容不含病人識別資料或病摘全文。</p>
+  </header>
+
+  <main>
+    <section>
+      <h2>整體資料流</h2>
+      <div class="flow">
+        <div class="step"><strong>ER_Main</strong>急診病摘主頁與病人清單。</div>
+        <div class="step"><strong>選病人</strong>右側病人資訊更新。</div>
+        <div class="step"><strong>體系 icon</strong><code>span[title="體系病歷"]</code></div>
+        <div class="step"><strong>IOEnote</strong>體系病歷查詢頁。</div>
+        <div class="step"><strong>點左側事件</strong><code>label.DetailLi</code></div>
+        <div class="step"><strong>讀 iframe</strong><code>#iframFormOnlyNote #nav-tabContent</code></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>ER_Main 急診病摘主頁</h2>
+      <div class="mock-window">
+        <div class="mock-title">/WEB/ipdNote/ER_Main</div>
+        <div class="mock-body layout-er">
+          <div class="mock-box">
+            <h3>左側病人清單</h3>
+            <p class="muted"><code>#ERPatientListTable</code></p>
+            <div class="row"><span>病人列 <code>tbody tr</code></span><span class="pill">體系</span></div>
+            <div class="row"><span>姓名欄 <code>td:nth-child(6)</code></span><span class="pill">快捷</span></div>
+          </div>
+          <div class="grid">
+            <div class="mock-box">
+              <h3>右側病人資訊</h3>
+              <p><code>#erPatientinforDiv</code></p>
+              <p>原本院內體系按鈕：<code>span[title="體系病歷"]</code></p>
+            </div>
+            <div class="grid grid-2">
+              <div class="mock-box">
+                <h3>病摘內容</h3>
+                <p><code>#ER_Note</code></p>
+              </div>
+              <div class="mock-box">
+                <h3>評估內容</h3>
+                <p><code>#ER_Eva</code></p>
+              </div>
+            </div>
+            <div class="mock-box">
+              <h3>病人紀錄列表</h3>
+              <p><code>#ERPatientRecordListTable</code></p>
+            </div>
+            <div class="mock-box">
+              <h3>外掛病歷預覽</h3>
+              <p><code>#ed-note-record-preview</code></p>
+              <p class="muted">插入在 <code>#AllRecAndEvaDiv</code>，顯示最近讀取、摘要或一年統整結果。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>IOEnote 體系病歷查詢頁</h2>
+      <div class="mock-window">
+        <div class="mock-title">/web/MRN/IOEnote/Index</div>
+        <div class="mock-body">
+          <div class="mock-box">
+            <h3>查詢區</h3>
+            <p><code>#IOEnoteForm</code>、<code>#CurrentChartno</code>、<code>#searchDate</code>、<code>#QueryData</code></p>
+          </div>
+          <div class="grid layout-ioe">
+            <div class="mock-box">
+              <h3>左側一年內事件樹</h3>
+              <p class="muted"><code>#treeview</code></p>
+              <div class="tree-item">急診群組：<code>label.DetailLi</code> 急診來診</div>
+              <div class="tree-item highlight">目前選取：<code>.highlight</code></div>
+              <div class="tree-item">住院群組：入院病摘 / 出院病摘 / 病程紀錄</div>
+              <div class="tree-item">門診群組：<code>label.DetailOPD</code></div>
+            </div>
+            <div class="mock-box">
+              <h3>右側詳細內容</h3>
+              <div class="tabs">
+                <span class="tab active">#NoteLi 病摘</span>
+                <span class="tab">#TrackModifyLi 追蹤修訂</span>
+                <span class="tab">#OrderLi 醫囑</span>
+              </div>
+              <p><code>#Note</code> 是外框，不是真正本文。</p>
+              <div class="iframe">
+                <strong>真正病摘來源</strong>
+                <p><code>#iframFormOnlyNote</code></p>
+                <p><code>#nav-tabContent</code> 是外掛主要讀取位置。</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>外掛面板</h2>
+      <div class="grid grid-2">
+        <div class="assistant">
+          <div class="assistant-title">急診病摘輔助 #ed-note-assistant</div>
+          <div class="assistant-body">
+            <div class="button-row">
+              <span class="fake-button primary">讀取選取/頁面文字</span>
+              <span class="fake-button">整理病摘摘要</span>
+              <span class="fake-button">統整一年病歷</span>
+              <span class="fake-button danger">停止統整</span>
+              <span class="fake-button">診斷候選</span>
+              <span class="fake-button">匯出架構</span>
+            </div>
+            <div class="mini-card">病摘文字 textarea：目前讀到的單筆或批次文字。</div>
+            <div class="mini-card">結果區：摘要、時間軸、診斷線索、短版草稿。</div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>安全邊界</h3>
+          <ul>
+            <li>只在本機瀏覽器讀取與整理。</li>
+            <li>不自動送出、不儲存、不列印。</li>
+            <li>不自動寫回 ER_Main。</li>
+            <li>不把病歷內容傳到外部服務。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>一年病歷統整流程</h2>
+      <div class="flow">
+        <div class="step"><strong>掃描</strong><code>label.DetailLi</code><br><code>label.DetailOPD</code></div>
+        <div class="step"><strong>分類</strong>急診、住院、門診、手術相關。</div>
+        <div class="step"><strong>精簡模式</strong>挑高價值類型，跳過大量日常病程。</div>
+        <div class="step"><strong>逐筆點開</strong>等待右側 iframe 載入。</div>
+        <div class="step"><strong>讀取</strong><code>#nav-tabContent</code></div>
+        <div class="step"><strong>輸出</strong>過去病史、門診用藥、近期手術紀錄。</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>目前輸出重點</h2>
+      <div class="grid grid-3">
+        <div class="card">
+          <h3>1. 過去病史</h3>
+          <p>從入院病摘、出院病摘、轉入/轉出病摘與急診內容抓診斷、既往病史與慢性病線索。</p>
+        </div>
+        <div class="card">
+          <h3>2. 門診用藥</h3>
+          <p>從讀到的文字中找用藥、藥物、medication、口服、qd/bid/tid 等線索。</p>
+        </div>
+        <div class="card">
+          <h3>3. 近期手術紀錄</h3>
+          <p>從病摘中找手術、術後、operation、procedure、清創、引流、導管等線索。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>功能追加地圖</h2>
+      <div class="feature-map">
+        <div class="feature safe">
+          <h3>低風險</h3>
+          <ul>
+            <li>讀取來源狀態</li>
+            <li>字數與載入狀態</li>
+            <li>手動複製摘要</li>
+          </ul>
+        </div>
+        <div class="feature medium">
+          <h3>中風險</h3>
+          <ul>
+            <li>一年統整</li>
+            <li>診斷線索</li>
+            <li>缺漏提醒</li>
+          </ul>
+        </div>
+        <div class="feature risky">
+          <h3>高風險</h3>
+          <ul>
+            <li>自動回填</li>
+            <li>自動送出</li>
+            <li>外部 AI 整合</li>
+          </ul>
+        </div>
+        <div class="feature">
+          <h3>目前建議</h3>
+          <ul>
+            <li>先完善本機摘要</li>
+            <li>維持人工確認</li>
+            <li>逐步增加可選範圍</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
