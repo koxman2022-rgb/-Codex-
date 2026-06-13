@@ -54,3 +54,7 @@
 ## 外掛新增行為
 
 外掛會在左側病人清單 `#ERPatientListTable tbody tr` 的姓名欄 `td:nth-child(6)` 補上一個「體系」代理按鈕。這個按鈕不直接取代院內原本元件，而是先點選該病人列，短暫等待右側資訊更新，再點擊右側原本的 `span[title="體系病歷"]`。
+
+外掛也會攔截左側病人清單照會欄 `td:nth-child(4)` 的原始 `openConsult(...)` 計數 badge。新流程會先點選該病人列，沿用右側原生體系病歷入口 `MRNUrl(...)` 的 `Common/GetMRNUrl` 取得院內認可的體系 URL，再改開 `/WEB/MRN/CrossTeam`。跨團隊照護頁載入後會確認目標病歷號，確認無誤後自動切到 `data-type="NewConsultDr"` 的「醫師照會」分頁。
+
+右側病人紀錄列表 `#ERPatientRecordListTable` 的列點選後，外掛會以該列的紀錄時間與單張類型為索引，沿用體系病歷入口取得 `/web/MRN/IOEnote/Index` URL，在隱藏 iframe 背景載入急/住病摘頁，從左側 `label.DetailLi`/`label.DetailOPD` 清單找同分鐘且同類型的紀錄，點選後讀取體系病歷 iframe `#iframFormOnlyNote` 內容並顯示在 ER_Main 的外掛病歷預覽。

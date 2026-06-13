@@ -56,13 +56,21 @@
   const YEAR_RECORD_TIMEOUT_MS = 5000;
   const PATIENT_TABLE_SELECTOR = "#ERPatientListTable";
   const PATIENT_NAME_CELL_SELECTOR = "td:nth-child(6)";
+  const PATIENT_CONSULT_CELL_SELECTOR = "td:nth-child(4)";
   const SYSTEM_RECORD_SELECTOR = 'span[title="體系病歷"]';
   const SYSTEM_RECORD_SHORTCUT_CLASS = "ed-note-system-record-shortcut";
   const PATIENT_NAME_CELL_CLASS = "ed-note-patient-name-cell";
   const PATIENT_NAME_TEXT_CLASS = "ed-note-patient-name-text";
   const SHORTCUT_OBSERVER_FLAG = "edNoteShortcutObserverReady";
   const ER_RECORD_PREVIEW_OBSERVER_FLAG = "edNoteRecordPreviewObserverReady";
+  const ER_CONSULT_REDIRECT_OBSERVER_FLAG = "edNoteConsultRedirectObserverReady";
+  const CROSS_TEAM_DOCTOR_CONSULT_OBSERVER_FLAG = "edNoteCrossTeamDoctorConsultObserverReady";
   const ER_RECORD_PREVIEW_PROGRAMMATIC_CLICK_FLAG = "edNoteRecordPreviewClicking";
+  const CROSS_TEAM_DOCTOR_CONSULT_STORAGE_KEY = "edNoteCrossTeamDoctorConsultTarget";
+  const CROSS_TEAM_DOCTOR_CONSULT_TYPE = "NewConsultDr";
+  const CROSS_TEAM_DOCTOR_CONSULT_MAX_AGE_MS = 120000;
+  const CROSS_TEAM_DOCTOR_CONSULT_RETRY_MS = 500;
+  const CROSS_TEAM_DOCTOR_CONSULT_TIMEOUT_MS = 30000;
   const SYSTEM_RECORD_FAST_DELAY_MS = 80;
   const SYSTEM_RECORD_RETRY_TIMEOUT_MS = 900;
   const ER_RECORD_PREVIEW_TIMEOUT_MS = 30000;
@@ -203,6 +211,7 @@
     document.body.appendChild(panel);
     enhanceErMainPatientList();
     createErMainPreviewPanel();
+    activatePendingCrossTeamDoctorConsult();
   }
 
   function getSource(panel) {
@@ -268,15 +277,20 @@
   }
 
   function extractMrnIoeNoteText() {
-    if (!document.querySelector(MRN_IOENOTE_SELECTORS.form)) {
+    return extractMrnIoeNoteTextFromDocument(document);
+  }
+
+  function extractMrnIoeNoteTextFromDocument(rootDocument) {
+    if (!rootDocument.querySelector(MRN_IOENOTE_SELECTORS.form)) {
       return "";
     }
 
     const frameText = extractAccessibleFrameText(
       MRN_IOENOTE_SELECTORS.noteFrame,
-      MRN_IOENOTE_FRAME_CONTENT_SELECTOR
+      MRN_IOENOTE_FRAME_CONTENT_SELECTOR,
+      rootDocument
     );
-    const noteHeaderText = getElementText(MRN_IOENOTE_SELECTORS.noteHeaderTable);
+    const noteHeaderText = getElementText(MRN_IOENOTE_SELECTORS.noteHeaderTable, rootDocument);
     if (frameText) {
       return compactText([noteHeaderText, frameText].filter(Boolean).join("\n"));
     }
@@ -290,7 +304,7 @@
     ];
 
     const topDocumentText = selectors
-      .map((selector) => document.querySelector(selector))
+      .map((selector) => rootDocument.querySelector(selector))
       .filter(Boolean)
       .map((element) => element.innerText || "")
       .filter(Boolean)
@@ -299,8 +313,8 @@
     return compactText(topDocumentText);
   }
 
-  function extractAccessibleFrameText(frameSelector, contentSelector) {
-    const frame = document.querySelector(frameSelector);
+  function extractAccessibleFrameText(frameSelector, contentSelector, rootDocument = document) {
+    const frame = rootDocument.querySelector(frameSelector);
     if (!frame) {
       return "";
     }
@@ -314,8 +328,8 @@
     return compactText(content.innerText || "");
   }
 
-  function getElementText(selector) {
-    const element = document.querySelector(selector);
+  function getElementText(selector, rootDocument = document) {
+    const element = rootDocument.querySelector(selector);
     return element ? compactText(element.innerText || "") : "";
   }
 
@@ -497,6 +511,95 @@
         });
       });
     return lines.join("\n");
+  }
+
+  function formatPreviewTextForRecord(recordMeta, text) {
+    if (!recordMeta || !recordMeta.formName || !recordMeta.formName.includes("來診")) {
+      return text;
+    }
+
+    const fields = [
+      {
+        title: "1. **生命徵象**",
+        value: extractFocusedPreviewField(text, [
+          "生命徵象",
+          "vital sign",
+          "vital signs",
+          "v/s",
+          "vs",
+          "bt",
+          "bp",
+          "hr",
+          "rr",
+          "spo2"
+        ], 4)
+      },
+      {
+        title: "2. **主訴 (Chief Complaint)**",
+        value: extractFocusedPreviewField(text, [
+          "主訴",
+          "chief complaint",
+          "complaint",
+          "cc",
+          "來診原因"
+        ], 3)
+      },
+      {
+        title: "3. **來診臆斷 (Tentative Diagnosis)**",
+        value: extractFocusedPreviewField(text, [
+          "來診臆斷",
+          "臆斷",
+          "tentative diagnosis",
+          "tentative dx",
+          "diagnosis",
+          "impression"
+        ], 4)
+      }
+    ];
+
+    const summaryText = formatClinicalSummaryText(summarizeClinicalText(text));
+    return [
+      ...fields.flatMap((field) => [field.title, field.value || "未擷取到", ""]),
+      "------",
+      summaryText
+    ].join("\n");
+  }
+
+  function extractFocusedPreviewField(text, keywords, maxLines) {
+    const lines = getClinicalSummaryLines(text);
+    const selected = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      const normalizedLine = line.toLowerCase();
+      if (!keywords.some((keyword) => normalizedLine.includes(keyword.toLowerCase()))) {
+        continue;
+      }
+      selected.push(cleanFocusedPreviewLine(line));
+      for (let offset = 1; offset <= 2 && selected.length < maxLines; offset += 1) {
+        const nextLine = lines[index + offset];
+        if (nextLine && !looksLikeNewClinicalField(nextLine)) {
+          selected.push(cleanFocusedPreviewLine(nextLine));
+        }
+      }
+      break;
+    }
+
+    return selected
+      .filter(Boolean)
+      .slice(0, maxLines)
+      .join("\n");
+  }
+
+  function cleanFocusedPreviewLine(line) {
+    return truncateText(
+      compactText(line)
+        .replace(/^(生命徵象|vital signs?|v\/s|vs|主訴|chief complaint|complaint|cc|來診原因|來診臆斷|臆斷|tentative diagnosis|tentative dx|diagnosis|impression)\s*[:：-]?\s*/i, ""),
+      260
+    );
+  }
+
+  function looksLikeNewClinicalField(line) {
+    return /^(主訴|現病史|病史|過去病史|生命徵象|檢查|檢驗|處置|治療|診斷|臆斷|來診臆斷|過敏|用藥|plan|assessment|impression|diagnosis|history|hpi|chief complaint|vital)/i.test(compactText(line));
   }
 
   async function aggregateYearRecords(panel) {
@@ -1058,8 +1161,324 @@
 
   function runErMainEnhancements() {
     addSystemRecordShortcuts();
+    attachErMainConsultRedirectEvents();
     attachErMainRecordPreviewEvents();
     createErMainPreviewPanel();
+  }
+
+  function attachErMainConsultRedirectEvents() {
+    if (!document.querySelector(ER_MAIN_SELECTORS.patientTable) || !document.body) {
+      return;
+    }
+    if (document.body.dataset[ER_CONSULT_REDIRECT_OBSERVER_FLAG] === "true") {
+      return;
+    }
+    document.body.dataset[ER_CONSULT_REDIRECT_OBSERVER_FLAG] = "true";
+
+    document.addEventListener("click", handleErMainConsultRedirectClick, true);
+  }
+
+  function handleErMainConsultRedirectClick(event) {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    const consultBadge = target.closest(`${PATIENT_TABLE_SELECTOR} tbody tr ${PATIENT_CONSULT_CELL_SELECTOR} [onclick*="openConsult"]`);
+    if (!consultBadge) {
+      return;
+    }
+
+    const row = consultBadge.closest("tr");
+    const consultArgs = parseOpenConsultArgs(consultBadge.getAttribute("onclick") || "");
+    const chartNo = consultArgs.chartNo || getPatientRowChartNo(row);
+    if (!chartNo) {
+      showPanelStatus("找不到這列病人的病歷號，無法開啟跨團隊醫師照會。");
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    openCrossTeamDoctorConsultForRow(row, chartNo);
+  }
+
+  function parseOpenConsultArgs(onclickValue) {
+    const args = [];
+    const pattern = /'([^']*)'/g;
+    let match = pattern.exec(onclickValue);
+    while (match) {
+      args.push(match[1]);
+      match = pattern.exec(onclickValue);
+    }
+    return {
+      hospital: args[0] || "",
+      chartNo: args[1] || "",
+      regDate: args[2] || ""
+    };
+  }
+
+  function getPatientRowChartNo(row) {
+    if (!row || !row.cells[4]) {
+      return "";
+    }
+    return compactText(row.cells[4].innerText || "").replace(/\D/g, "");
+  }
+
+  async function openCrossTeamDoctorConsultForRow(row, chartNo) {
+    clickElement(row);
+    saveCrossTeamDoctorConsultTarget(chartNo);
+
+    const placeholderWindow = window.open("about:blank", "_blank");
+    await sleep(SYSTEM_RECORD_FAST_DELAY_MS);
+
+    const systemRecordButton = await waitForElement(SYSTEM_RECORD_SELECTOR, SYSTEM_RECORD_RETRY_TIMEOUT_MS);
+    const loginUser = getSystemRecordLoginUser(systemRecordButton);
+    if (!loginUser) {
+      if (placeholderWindow) {
+        placeholderWindow.close();
+      }
+      showPanelStatus("找不到體系病歷入口參數，無法開啟跨團隊醫師照會。");
+      return;
+    }
+
+    try {
+      const mrnUrl = await fetchSystemRecordUrl(chartNo, loginUser);
+      const crossTeamUrl = buildCrossTeamUrl(mrnUrl);
+      if (placeholderWindow) {
+        placeholderWindow.location.href = crossTeamUrl;
+        activateDoctorConsultInOpenedCrossTeamWindow(placeholderWindow, chartNo, Date.now());
+      } else {
+        window.open(crossTeamUrl, "_blank");
+      }
+      showPanelStatus("已用體系病歷入口開啟跨團隊照護：醫師照會。");
+    } catch (error) {
+      if (placeholderWindow) {
+        placeholderWindow.close();
+      }
+      clearCrossTeamDoctorConsultTarget();
+      showPanelStatus(`開啟跨團隊醫師照會失敗：${error.message || "請稍後再試"}`);
+    }
+  }
+
+  function clickElement(element) {
+    if (!element) {
+      return;
+    }
+    if (typeof element.click === "function") {
+      element.click();
+      return;
+    }
+    const event = document.createEvent("MouseEvents");
+    event.initMouseEvent("click", true, true, window, 1, 0, 0, 0, 0, false, false, false, false, 0, null);
+    element.dispatchEvent(event);
+  }
+
+  function clickElementInDocument(ownerDocument, element) {
+    if (!element) {
+      return;
+    }
+    if (typeof element.click === "function") {
+      element.click();
+      return;
+    }
+    const event = ownerDocument.createEvent("MouseEvents");
+    event.initMouseEvent("click", true, true, ownerDocument.defaultView || window, 1, 0, 0, 0, 0, false, false, false, false, 0, null);
+    element.dispatchEvent(event);
+  }
+
+  function triggerOpenedWindowJQueryClick(openedWindow, element) {
+    try {
+      if (openedWindow && openedWindow.jQuery && element) {
+        openedWindow.jQuery(element).trigger("click");
+      }
+    } catch (error) {
+      // DOM click is the primary path.
+    }
+  }
+
+  function getSystemRecordLoginUser(systemRecordButton) {
+    const onclickValue = systemRecordButton ? systemRecordButton.getAttribute("onclick") || "" : "";
+    const match = onclickValue.match(/MRNUrl\('([^']*)','([^']*)'\)/);
+    return match ? match[2] : "";
+  }
+
+  async function fetchSystemRecordUrl(chartNo, loginUser) {
+    const response = await fetch(`${window.location.origin}/WEB/ipdNote/Common/GetMRNUrl`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
+      },
+      body: new URLSearchParams({
+        inChartno: chartNo,
+        inLoginUser: loginUser
+      }).toString()
+    });
+    const text = compactText(await response.text());
+    if (!response.ok || !text.includes("intraweb")) {
+      throw new Error("體系病歷入口沒有回傳有效網址");
+    }
+    return text;
+  }
+
+  function buildCrossTeamUrl(mrnUrl) {
+    const url = new URL(mrnUrl, window.location.origin);
+    url.pathname = "/WEB/MRN/CrossTeam";
+    url.hash = "";
+    return url.toString();
+  }
+
+  function activateDoctorConsultInOpenedCrossTeamWindow(openedWindow, targetChartNo, startedAt) {
+    if (!openedWindow || openedWindow.closed) {
+      return;
+    }
+    if (Date.now() - startedAt >= CROSS_TEAM_DOCTOR_CONSULT_TIMEOUT_MS) {
+      return;
+    }
+
+    try {
+      const openedDocument = openedWindow.document;
+      if (!openedDocument || !/\/WEB\/MRN\/CrossTeam\/?$/i.test(openedWindow.location.pathname)) {
+        window.setTimeout(() => {
+          activateDoctorConsultInOpenedCrossTeamWindow(openedWindow, targetChartNo, startedAt);
+        }, CROSS_TEAM_DOCTOR_CONSULT_RETRY_MS);
+        return;
+      }
+
+      const doctorConsultTab = openedDocument.querySelector(`.ct-type[data-type="${CROSS_TEAM_DOCTOR_CONSULT_TYPE}"]`);
+      if (!doctorConsultTab) {
+        window.setTimeout(() => {
+          activateDoctorConsultInOpenedCrossTeamWindow(openedWindow, targetChartNo, startedAt);
+        }, CROSS_TEAM_DOCTOR_CONSULT_RETRY_MS);
+        return;
+      }
+
+      const currentChartNo = getCrossTeamCurrentChartNo(openedDocument);
+      if (currentChartNo && currentChartNo !== targetChartNo) {
+        showPanelStatus("跨團隊頁未成功切到目標病人，已停止自動切換醫師照會。");
+        return;
+      }
+
+      clickElementInDocument(openedDocument, doctorConsultTab);
+      triggerOpenedWindowJQueryClick(openedWindow, doctorConsultTab);
+      clearCrossTeamDoctorConsultTarget();
+      showPanelStatus("已切換到跨團隊照護：醫師照會。");
+    } catch (error) {
+      window.setTimeout(() => {
+        activateDoctorConsultInOpenedCrossTeamWindow(openedWindow, targetChartNo, startedAt);
+      }, CROSS_TEAM_DOCTOR_CONSULT_RETRY_MS);
+    }
+  }
+
+  function saveCrossTeamDoctorConsultTarget(chartNo) {
+    const target = {
+      chartNo,
+      type: CROSS_TEAM_DOCTOR_CONSULT_TYPE,
+      createdAt: Date.now()
+    };
+
+    try {
+      window.localStorage.setItem(CROSS_TEAM_DOCTOR_CONSULT_STORAGE_KEY, JSON.stringify(target));
+    } catch (error) {
+      // Ignore storage failures; the POST still opens CrossTeam.
+    }
+  }
+
+  function loadCrossTeamDoctorConsultTarget() {
+    try {
+      const raw = window.localStorage.getItem(CROSS_TEAM_DOCTOR_CONSULT_STORAGE_KEY);
+      if (!raw) {
+        return null;
+      }
+      const target = JSON.parse(raw);
+      if (!target || target.type !== CROSS_TEAM_DOCTOR_CONSULT_TYPE || !target.chartNo) {
+        return null;
+      }
+      if (Date.now() - Number(target.createdAt || 0) > CROSS_TEAM_DOCTOR_CONSULT_MAX_AGE_MS) {
+        clearCrossTeamDoctorConsultTarget();
+        return null;
+      }
+      return target;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function clearCrossTeamDoctorConsultTarget() {
+    try {
+      window.localStorage.removeItem(CROSS_TEAM_DOCTOR_CONSULT_STORAGE_KEY);
+    } catch (error) {
+      // Ignore storage failures.
+    }
+  }
+
+  function activatePendingCrossTeamDoctorConsult() {
+    if (!/\/WEB\/MRN\/CrossTeam\/?$/i.test(window.location.pathname)) {
+      return;
+    }
+
+    scheduleCrossTeamDoctorConsultPolling();
+    const target = loadCrossTeamDoctorConsultTarget();
+    if (!target) {
+      return;
+    }
+
+    activatePendingCrossTeamDoctorConsultWithRetry(target, Date.now());
+  }
+
+  function scheduleCrossTeamDoctorConsultPolling() {
+    if (!document.body || document.body.dataset[CROSS_TEAM_DOCTOR_CONSULT_OBSERVER_FLAG] === "true") {
+      return;
+    }
+    document.body.dataset[CROSS_TEAM_DOCTOR_CONSULT_OBSERVER_FLAG] = "true";
+
+    const startedAt = Date.now();
+    const intervalId = window.setInterval(() => {
+      const target = loadCrossTeamDoctorConsultTarget();
+      if (target) {
+        window.clearInterval(intervalId);
+        activatePendingCrossTeamDoctorConsultWithRetry(target, Date.now());
+        return;
+      }
+      if (Date.now() - startedAt >= CROSS_TEAM_DOCTOR_CONSULT_TIMEOUT_MS) {
+        window.clearInterval(intervalId);
+      }
+    }, 1000);
+  }
+
+  function activatePendingCrossTeamDoctorConsultWithRetry(target, startedAt) {
+    const doctorConsultTab = document.querySelector(`.ct-type[data-type="${CROSS_TEAM_DOCTOR_CONSULT_TYPE}"]`);
+    if (!doctorConsultTab) {
+      if (Date.now() - startedAt >= CROSS_TEAM_DOCTOR_CONSULT_TIMEOUT_MS) {
+        showPanelStatus("找不到跨團隊照護的醫師照會分頁。");
+        return;
+      }
+      window.setTimeout(() => {
+        activatePendingCrossTeamDoctorConsultWithRetry(target, startedAt);
+      }, CROSS_TEAM_DOCTOR_CONSULT_RETRY_MS);
+      return;
+    }
+
+    const currentChartNo = getCrossTeamCurrentChartNo();
+    if (currentChartNo && currentChartNo !== target.chartNo) {
+      showPanelStatus("跨團隊頁未成功切到目標病人，已停止自動切換醫師照會。");
+      clearCrossTeamDoctorConsultTarget();
+      return;
+    }
+
+    clickElement(doctorConsultTab);
+    clearCrossTeamDoctorConsultTarget();
+    showPanelStatus("已切換到跨團隊照護：醫師照會。");
+  }
+
+  function getCrossTeamCurrentChartNo(rootDocument = document) {
+    const candidates = [
+      rootDocument.querySelector('input[name="Chart_NO"]'),
+      rootDocument.querySelector("#CurrentChartno"),
+      rootDocument.querySelector("#CharNo")
+    ];
+    return compactText(candidates.map((element) => (element ? element.value : "")).find(Boolean) || "").replace(/\D/g, "");
   }
 
   function attachErMainRecordPreviewEvents() {
@@ -1094,17 +1513,176 @@
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
-      submitErReadonlyPreviewFromRow(row);
+      highlightErRecordRow(row);
+      previewMrnIoeRecordForErRow(row);
       return;
     }
 
     window.setTimeout(() => {
-      submitErReadonlyPreviewFromRow(row);
+      highlightErRecordRow(row);
+      previewMrnIoeRecordForErRow(row);
     }, 120);
   }
 
   function triggerErRecordPreviewFromRow(row) {
-    submitErReadonlyPreviewFromRow(row);
+    highlightErRecordRow(row);
+    previewMrnIoeRecordForErRow(row);
+  }
+
+  function highlightErRecordRow(row) {
+    if (!row) {
+      return;
+    }
+    document.querySelectorAll(`${ER_MAIN_SELECTORS.recordTable} tbody tr.highlight`).forEach((highlightedRow) => {
+      highlightedRow.classList.remove("highlight");
+    });
+    row.classList.add("highlight");
+  }
+
+  async function previewMrnIoeRecordForErRow(row) {
+    createErMainPreviewPanel();
+    const frame = getOrCreateErPreviewFrame();
+    const meta = getErRecordRowMeta(row);
+    const sequence = erRecordPreviewState.sequence + 1;
+    erRecordPreviewState.sequence = sequence;
+
+    renderErPreviewMessage("正在背景開啟體系病歷，並尋找相同日期與類型的紀錄。", meta);
+
+    try {
+      const chartNo = getErRecordCellText(row, 23) || getSelectedErPatientChartNo();
+      const systemRecordButton = await waitForElement(SYSTEM_RECORD_SELECTOR, SYSTEM_RECORD_RETRY_TIMEOUT_MS);
+      const loginUser = getSystemRecordLoginUser(systemRecordButton);
+      if (!chartNo || !loginUser) {
+        throw new Error("找不到體系病歷入口參數");
+      }
+
+      const mrnUrl = await fetchSystemRecordUrl(chartNo, loginUser);
+      const ioeUrl = buildIoeNoteUrl(mrnUrl);
+      await loadFrameUrl(frame, ioeUrl, ER_RECORD_PREVIEW_TIMEOUT_MS);
+      const frameDocument = getAccessibleFrameDocument(frame);
+      if (!frameDocument) {
+        throw new Error("無法讀取體系病歷背景頁");
+      }
+
+      const matchedLabel = await findAndClickMatchingIoeRecord(frame, meta, ER_RECORD_PREVIEW_TIMEOUT_MS);
+      if (!matchedLabel) {
+        throw new Error("體系病歷找不到相同日期與類型的紀錄");
+      }
+
+      const text = await waitForIoeFrameRecordText(frame, ER_RECORD_PREVIEW_TIMEOUT_MS);
+      if (erRecordPreviewState.sequence !== sequence) {
+        return;
+      }
+      if (!text || text.length < 20) {
+        throw new Error("體系病歷內容讀取過短");
+      }
+
+      const previewText = formatPreviewTextForRecord(meta, text);
+      renderErPreviewText(meta, previewText);
+      saveRecentPreview(meta.title || "體系病歷預覽", previewText);
+    } catch (error) {
+      if (erRecordPreviewState.sequence === sequence) {
+        renderErPreviewMessage(`背景讀取體系病歷失敗：${error.message || "請稍後再試"}`, meta);
+      }
+    }
+  }
+
+  function buildIoeNoteUrl(mrnUrl) {
+    const url = new URL(mrnUrl, window.location.origin);
+    url.pathname = "/web/MRN/IOEnote/Index";
+    url.hash = "";
+    return url.toString();
+  }
+
+  function getSelectedErPatientChartNo() {
+    const infoText = getElementText(ER_MAIN_SELECTORS.patientInfoPanel);
+    const match = infoText.match(/\((\d{6,})\)/);
+    return match ? match[1] : "";
+  }
+
+  function loadFrameUrl(frame, url, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => {
+        reject(new Error("體系病歷背景頁載入逾時"));
+      }, timeoutMs);
+      frame.onload = () => {
+        window.clearTimeout(timeoutId);
+        window.setTimeout(resolve, 800);
+      };
+      frame.src = url;
+    });
+  }
+
+  async function findAndClickMatchingIoeRecord(frame, meta, timeoutMs) {
+    const startedAt = Date.now();
+    let bestLabel = null;
+    while (Date.now() - startedAt < timeoutMs) {
+      const frameDocument = getAccessibleFrameDocument(frame);
+      const labels = frameDocument ? Array.from(frameDocument.querySelectorAll("label.DetailLi, label.DetailOPD")) : [];
+      bestLabel = findBestIoeRecordLabel(labels, meta);
+      if (bestLabel) {
+        clickElementInDocument(frameDocument, bestLabel);
+        return bestLabel;
+      }
+      await sleep(300);
+    }
+    return null;
+  }
+
+  function findBestIoeRecordLabel(labels, meta) {
+    const targetDate = normalizeRecordMinute(meta.recordTime);
+    const targetType = normalizeIoeRecordType(meta.formName);
+    return labels.find((label) => {
+      const text = compactText(label.innerText || label.textContent || "");
+      const labelDate = normalizeRecordMinute(text);
+      const labelType = normalizeIoeRecordType(text);
+      return labelDate === targetDate && (!targetType || !labelType || labelType === targetType);
+    }) || labels.find((label) => {
+      const text = compactText(label.innerText || label.textContent || "");
+      return normalizeRecordMinute(text) === targetDate;
+    });
+  }
+
+  function normalizeRecordMinute(text) {
+    const match = String(text || "").match(/(\d{4})[/-](\d{1,2})[/-](\d{1,2})\s+(\d{1,2}):(\d{2})/);
+    if (!match) {
+      return "";
+    }
+    const [, year, month, day, hour, minute] = match;
+    return `${year}/${month.padStart(2, "0")}/${day.padStart(2, "0")} ${hour.padStart(2, "0")}:${minute}`;
+  }
+
+  function normalizeIoeRecordType(text) {
+    const types = [
+      "外傷來診紀錄",
+      "急診來診",
+      "急診轉歸",
+      "急診病程",
+      "轉區摘要",
+      "入院病摘",
+      "出院病摘",
+      "轉入病摘",
+      "轉出病摘"
+    ];
+    return types.find((type) => String(text || "").includes(type)) || "";
+  }
+
+  async function waitForIoeFrameRecordText(frame, timeoutMs) {
+    await sleep(YEAR_RECORD_LOAD_DELAY_MS);
+    const startedAt = Date.now();
+    let bestText = "";
+    while (Date.now() - startedAt < timeoutMs) {
+      const frameDocument = getAccessibleFrameDocument(frame);
+      const text = frameDocument ? extractMrnIoeNoteTextFromDocument(frameDocument) : "";
+      if (text.length > bestText.length) {
+        bestText = text;
+      }
+      if (text.length >= 80) {
+        return text;
+      }
+      await sleep(250);
+    }
+    return bestText;
   }
 
   function submitErReadonlyPreviewFromRow(row) {
@@ -1133,7 +1711,7 @@
       }
     };
 
-    renderErPreviewMessage("正在背景讀取這筆病歷；若跳出調閱權限確認，按確定後會繼續載入。", meta);
+    renderErPreviewMessage("正在背景讀取這筆病歷，請稍候。若跳出調閱權限確認，按確定後會繼續載入。", meta);
     form.setAttribute("target", frame.name);
 
     let finished = false;
@@ -1269,11 +1847,30 @@
     const preferredText = preferredSelectors
       .map((selector) => frameDocument.querySelector(selector))
       .filter(Boolean)
-      .map((element) => element.innerText || "")
+      .map((element) => collectElementReadableText(element))
       .filter(Boolean)
       .join("\n");
 
-    return compactText(preferredText || frameDocument.body.innerText || "");
+    return compactText(preferredText || collectElementReadableText(frameDocument.body));
+  }
+
+  function collectElementReadableText(element) {
+    if (!element) {
+      return "";
+    }
+
+    const controlText = Array.from(element.querySelectorAll("textarea, input, select"))
+      .map((control) => {
+        if (control.tagName === "SELECT") {
+          const selected = control.options && control.selectedIndex >= 0 ? control.options[control.selectedIndex] : null;
+          return selected ? selected.text || selected.value : control.value;
+        }
+        return control.value || "";
+      })
+      .filter(Boolean)
+      .join("\n");
+
+    return compactText([element.innerText || "", controlText].filter(Boolean).join("\n"));
   }
 
   function getErRecordRowMeta(row) {

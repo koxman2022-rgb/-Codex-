@@ -245,7 +245,7 @@
 }
 
 .ed-note-record-preview {
-  min-height: 280px;
+  height: 220px;
   margin: 8px 10px 12px;
   color: #172018;
   font-family: Arial, "Microsoft JhengHei", sans-serif;
@@ -254,6 +254,8 @@
   background: #f8fbf9;
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.12);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .ed-note-record-preview__header {
@@ -261,7 +263,9 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 12px;
+  flex: 0 0 auto;
+  min-height: 52px;
+  padding: 7px 12px;
   color: #fff;
   background: #2f7f5a;
 }
@@ -295,10 +299,11 @@
 }
 
 .ed-note-record-preview__body {
-  max-height: 440px;
-  min-height: 220px;
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 12px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   white-space: pre-wrap;
   background: #fff;
   font-size: 14px;
